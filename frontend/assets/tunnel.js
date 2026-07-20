@@ -38,6 +38,7 @@ const state = {
   tunnelId: '',
   file: null,
   ready: false, // true once we have a valid tunnelid + tempkey
+  currentDecrypt: null, // { file, blobUrl, rowEl } — the row currently in "Download" state
 };
 
 // Read the tunnel temp key FRESH from the URL fragment at every action.
@@ -53,6 +54,26 @@ function currentTempKey() {
 function readPass(id) {
   const el = $(id);
   return el ? (el.value || '').trim() : '';
+}
+
+// Revert the currently-"ready" row back to "idle" and revoke its blob URL.
+// Called at the start of every decryptOne, inside deleteOne, and inside refreshList.
+function resetCurrentDecrypt() {
+  if (!state.currentDecrypt) return;
+  if (state.currentDecrypt.blobUrl) {
+    URL.revokeObjectURL(state.currentDecrypt.blobUrl);
+  }
+  const row = state.currentDecrypt.rowEl;
+  if (row && row.isConnected) {
+    row.dataset.state = 'idle';
+    const btn = row.querySelector('.row-action-btn');
+    if (btn) {
+      btn.textContent = 'Decrypt';
+      btn.className = 'row-action-btn';
+      btn.disabled = false;
+    }
+  }
+  state.currentDecrypt = null;
 }
 
 // Lazily create the encrypt / decrypt progress flow widgets.
