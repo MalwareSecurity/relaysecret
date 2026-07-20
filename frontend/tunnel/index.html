@@ -57,6 +57,14 @@
       <div id="downloadBar" class="hidden" role="progressbar" aria-label="Download progress"></div>
     </div>
 
+    <!-- ── Decrypted result ───────────────────────────────── -->
+    <div class="card stack hidden" id="decCard">
+      <h2>Decrypted</h2>
+      <p id="decStatus" class="muted" role="status" aria-live="polite"></p>
+      <textarea id="decMsgOut" class="hidden" readonly aria-label="Decrypted message"></textarea>
+      <img id="decImg" class="preview hidden" alt="Decrypted image preview">
+    </div>
+
     <!-- ── Upload ─────────────────────────────────────────── -->
     <div class="card stack">
       <h2>Upload to this tunnel</h2>
@@ -88,17 +96,6 @@
       </div>
       <div id="encProgress" class="hidden" role="status" aria-live="polite"></div>
       <div id="uploadBar"   class="hidden" role="progressbar" aria-label="Upload progress"></div>
-    </div>
-
-    <!-- ── Decrypted result ───────────────────────────────── -->
-    <div class="card stack hidden" id="decCard">
-      <h2>Decrypted</h2>
-      <p id="decStatus" class="muted" role="status" aria-live="polite"></p>
-      <textarea id="decMsgOut" class="hidden" readonly aria-label="Decrypted message"></textarea>
-      <img id="decImg" class="preview hidden" alt="Decrypted image preview">
-      <div class="row">
-        <a id="decDownload" class="btn primary hidden" download>Save decrypted file</a>
-      </div>
     </div>
 
   </main>
