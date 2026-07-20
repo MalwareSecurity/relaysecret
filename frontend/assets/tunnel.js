@@ -411,14 +411,22 @@ $('btnUpload').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- decrypt one
-async function decryptOne(f) {
+async function decryptOne(f, tr, btn) {
   const card = $('decCard');
   const status = $('decStatus');
   const ta = $('decMsgOut');
   const img = $('decImg');
-  const a = $('decDownload');
   card.classList.remove('hidden');
-  ta.classList.add('hidden'); img.classList.add('hidden'); a.classList.add('hidden');
+  ta.classList.add('hidden'); img.classList.add('hidden');
+
+  // Reset any previously-"ready" row before starting a new decrypt.
+  resetCurrentDecrypt();
+
+  // Set this row to the "decrypting" state.
+  tr.dataset.state = 'decrypting';
+  btn.textContent = 'Decrypting…';
+  btn.classList.add('primary');
+  btn.disabled = true;
 
   const flow = decFlow();
   flow.show();
@@ -489,10 +497,18 @@ async function decryptOne(f) {
       currentStep = 3; flow.start(3); flow.done(3);
 
       if (usedPicker) {
+        // File was streamed straight to disk — no blob URL to keep.
+        state.currentDecrypt = { file: f, blobUrl: null, rowEl: tr };
         setStatus(status, 'Decrypted and saved: ' + name, 'ok');
       } else {
-        a.href = blobUrl; a.download = name; a.classList.remove('hidden');
-        a.click(); // auto-trigger save dialog
+        // Fallback: blob URL. Auto-trigger the save dialog once.
+        state.currentDecrypt = { file: f, blobUrl, rowEl: tr };
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = name;
+        document.body.append(a);
+        a.click();
+        a.remove();
         setStatus(status, 'Decrypted: ' + name, 'ok');
       }
     } else {
@@ -515,8 +531,17 @@ async function decryptOne(f) {
       flow.done(3);
 
       const url = URL.createObjectURL(new Blob([plain], { type: 'application/octet-stream' }));
-      a.href = url; a.download = name; a.classList.remove('hidden');
+      state.currentDecrypt = { file: f, blobUrl: url, rowEl: tr };
 
+      // Auto-trigger the save dialog once.
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+
+      // Inline preview for images and text in the Decrypted card.
       const ext = name.split('.').pop().toLowerCase();
       if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
         img.src = url;
@@ -530,6 +555,12 @@ async function decryptOne(f) {
       setStatus(status, 'Decrypted: ' + name, 'ok');
     }
 
+    // Transition this row's button to the "Download" / success state.
+    tr.dataset.state = 'ready';
+    btn.textContent = 'Download';
+    btn.className = 'row-action-btn success';
+    btn.disabled = false;
+
     if (meta.deleteondownload) {
       deleteObject({ region: REGION, key: f.key }).then(refreshList).catch(() => {});
     }
@@ -537,6 +568,11 @@ async function decryptOne(f) {
     console.error(err);
     flow.error(currentStep);
     if (downloadBar) downloadBar.error();
+    // Revert this row to idle on error.
+    tr.dataset.state = 'idle';
+    btn.textContent = 'Decrypt';
+    btn.className = 'row-action-btn';
+    btn.disabled = false;
     const isCrypto = err && /decrypt|OperationError|tag/i.test(String(err && err.message || err));
     setStatus(
       status,
