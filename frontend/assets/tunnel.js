@@ -430,13 +430,14 @@ async function decryptOne(f, tr, btn) {
   btn.classList.add('primary');
   btn.disabled = true;
 
-  const flow = decFlow();
-  flow.show();
-  flow.reset();
+  let flow = null;
   let currentStep = 0;
   let downloadBar = null;
-
   try {
+    flow = decFlow();
+    flow.show();
+    flow.reset();
+
     document.body.classList.add('busy');
 
     flow.start(0);
@@ -558,10 +559,14 @@ async function decryptOne(f, tr, btn) {
     }
 
     // Transition this row's button to the "Download" / success state.
-    tr.dataset.state = 'ready';
-    btn.textContent = 'Download';
-    btn.className = 'row-action-btn success';
-    btn.disabled = false;
+    // Guard against the row having been detached by a concurrent refreshList
+    // (e.g. delete-on-download fires refreshList before we reach here).
+    if (tr.isConnected) {
+      tr.dataset.state = 'ready';
+      btn.textContent = 'Download';
+      btn.className = 'row-action-btn success';
+      btn.disabled = false;
+    }
 
     if (meta.deleteondownload) {
       deleteObject({ region: REGION, key: f.key }).then(refreshList).catch(() => {});
