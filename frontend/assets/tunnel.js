@@ -190,6 +190,7 @@ function renderList(files) {
   }
   for (const f of files) {
     const tr = document.createElement('tr');
+    tr.dataset.state = 'idle';
     const tdName = document.createElement('td');
     tdName.className = 'name';
     tdName.textContent = safeFilename(f.objname) || '(unnamed)';
@@ -199,8 +200,9 @@ function renderList(files) {
     tdActs.className = 'actions';
 
     const btnDec = document.createElement('button');
+    btnDec.className = 'row-action-btn';
     btnDec.textContent = 'Decrypt';
-    btnDec.onclick = () => decryptOne(f);
+    btnDec.onclick = () => handleRowAction(f, tr, btnDec);
     const btnDel = document.createElement('button');
     btnDel.textContent = 'Delete';
     btnDel.onclick = () => deleteOne(f);
@@ -209,6 +211,23 @@ function renderList(files) {
     tr.append(tdName, tdSize, tdActs);
     tbody.append(tr);
   }
+}
+
+// Per-row button click: decrypt if idle, re-save if ready-with-blobUrl,
+// re-decrypt if ready-without-blobUrl (picker path). No-op while decrypting.
+function handleRowAction(f, tr, btn) {
+  const rowState = tr.dataset.state;
+  if (rowState === 'decrypting') return;
+  if (rowState === 'ready' && state.currentDecrypt && state.currentDecrypt.blobUrl) {
+    const a = document.createElement('a');
+    a.href = state.currentDecrypt.blobUrl;
+    a.download = safeFilename(state.currentDecrypt.file.objname) || 'file.bin';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    return;
+  }
+  decryptOne(f, tr, btn);
 }
 
 $('btnRefresh').onclick = refreshList;
