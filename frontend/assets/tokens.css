@@ -19,6 +19,7 @@
   --color-code-frag: #E8843A;    /* fragment highlight */
   --color-success: #2A7A54;
   --color-success-subtle: #EFF8F3; /* light green tint */
+  --color-success-hover: #235E42;  /* darker shade for button hover */
   --color-danger: #C0392B;
   --color-danger-subtle: #FBF1EF;
   --color-warning: #C98A1A;
@@ -161,6 +162,18 @@ button.primary, .btn.primary {
 button.primary:hover, .btn.primary:hover {
   background: var(--color-accent-hover);
   border-color: var(--color-accent-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+button.success, .btn.success {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #fff;
+  box-shadow: var(--shadow-xs);
+}
+button.success:hover, .btn.success:hover {
+  background: var(--color-success-hover);
+  border-color: var(--color-success-hover);
   box-shadow: var(--shadow-sm);
 }
 
