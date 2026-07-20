@@ -151,6 +151,8 @@ async function createRoom() {
 
 // ---------------------------------------------------------------- list
 async function refreshList() {
+  resetCurrentDecrypt();
+  $('decCard').classList.add('hidden');
   setStatus($('listStatus'), 'Loading files…');
   try {
     const resp = await listTunnel({ region: REGION, tunnel: state.tunnelId });
@@ -587,6 +589,8 @@ async function decryptOne(f, tr, btn) {
 }
 
 async function deleteOne(f) {
+  resetCurrentDecrypt();
+  $('decCard').classList.add('hidden');
   try {
     await deleteObject({ region: REGION, key: f.key });
     setStatus($('listStatus'), 'Deleted.', 'ok');
