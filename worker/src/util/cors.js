@@ -25,9 +25,10 @@ export function allowOrigin(env, request) {
 export function corsHeaders(env, request) {
   return {
     'Access-Control-Allow-Origin': allowOrigin(env, request),
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type,X-Relay-Capability,X-Turnstile-Token',
     'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
     'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
   };
 }
 
@@ -36,8 +37,7 @@ export function handlePreflight(request, env) {
   return new Response(null, { status: 204, headers: corsHeaders(env, request) });
 }
 
-// refererGate — mirrors lambda.py: in prod, reject anything whose Origin or
-// Referer does not start with one of the allowed FRONTEND_ORIGIN values.
+// refererGate — in prod, require an exact Origin or Referer origin match.
 // Devmode disables the check.
 // Returns null when the request is allowed, otherwise a 403 Response.
 export function refererGate(request, env) {
@@ -45,9 +45,13 @@ export function refererGate(request, env) {
   if (!origins) return null;
   const origin = request.headers.get('Origin') || '';
   const referer = request.headers.get('Referer') || '';
-  const ok = origins.some(
-    o => origin.startsWith(o) || referer.startsWith(o)
-  );
+  let refererOrigin = '';
+  try {
+    if (referer) refererOrigin = new URL(referer).origin;
+  } catch {
+    refererOrigin = '';
+  }
+  const ok = origins.some(o => origin === o || refererOrigin === o);
   if (ok) return null;
   return new Response(
     JSON.stringify({ error: 'origin not allowed', code: 'FORBIDDEN' }),

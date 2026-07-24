@@ -6,13 +6,19 @@
 //
 // Transport is hex strings via the Worker /clipboard/:id KV endpoints.
 
-import { encryptBlob, decryptBlob, sha256Hex } from './crypto.js';
+import {
+  encryptBlob,
+  decryptBlob,
+  sha256Hex,
+  deriveCapability,
+  capabilityId,
+} from './crypto.js';
 import { clipboardGet, clipboardPut, ApiError } from './api.js';
 import {
   $, setStatus, getQueryParams, getFragment, bytesToHex, hexToBytes,
 } from './ui.js';
 
-const state = { clipId: '', tempKey: '' };
+const state = { clipId: '', tempKey: '', capability: '' };
 
 function disableClipboardActions() {
   $('btnGet').disabled = true;
@@ -36,12 +42,19 @@ async function boot() {
       return;
     }
     const tempKey = await sha256Hex(name);
-    const full    = await sha256Hex(tempKey);
-    const id      = full.slice(0, 16);
+    const capability = await deriveCapability(tempKey, 'clipboard');
+    const id = await capabilityId(capability);
     window.location.href = window.location.pathname + '?clipboardid=' + id + '#' + tempKey;
     return;
   }
-  state.clipId = q.clipboardid;
+  state.capability = await deriveCapability(state.tempKey, 'clipboard');
+  const expectedId = await capabilityId(state.capability);
+  if (q.clipboardid !== expectedId) {
+    disableClipboardActions();
+    setStatus($('clipInfo'), 'Clipboard link is invalid or incomplete.', 'err');
+    return;
+  }
+  state.clipId = expectedId;
   $('clipInfo').textContent = 'Clipboard id: ' + state.clipId;
 }
 
@@ -57,7 +70,7 @@ $('btnUpdate').onclick = async () => {
     const blob = await encryptBlob(plain, $('passInput').value, state.tempKey);
 
     setStatus($('status'), 'Uploading…');
-    await clipboardPut(state.clipId, bytesToHex(blob));
+    await clipboardPut(state.clipId, bytesToHex(blob), state.capability);
     setStatus($('status'), 'Clipboard updated.', 'ok');
   } catch (err) {
     console.error(err);
@@ -73,7 +86,7 @@ $('btnGet').onclick = async () => {
     setStatus($('status'), 'Fetching…');
     let payload;
     try {
-      payload = await clipboardGet(state.clipId);
+      payload = await clipboardGet(state.clipId, state.capability);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setStatus($('status'), 'No clipboard data yet.', 'warn');

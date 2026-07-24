@@ -5,6 +5,7 @@
 import { jsonResponse, errorResponse } from '../util/json.js';
 import { resolveRegion } from '../util/regions.js';
 import { tunnelHash } from '../util/keys.js';
+import { readCapability, verifyScopedCapability } from '../util/capability.js';
 
 // Hard cap on objects returned per tunnel list. A tunnel with more than this
 // many files is not usable in a browser anyway, and iterating past this would
@@ -29,9 +30,12 @@ export async function tunnelList(url, request, env) {
   const q = url.searchParams;
   const region = resolveRegion(q.get('region'), env);
 
-  const tunnel = q.get('tunnel') || '';
-  if (!/^[A-Za-z0-9]+$/.test(tunnel) || tunnel.length < 1 || tunnel.length > 64) {
+  const tunnel = (q.get('tunnel') || '').toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(tunnel)) {
     return errorResponse('invalid tunnel name', 'BAD_INPUT', 400, env, request);
+  }
+  if (!await verifyScopedCapability(tunnel, readCapability(request))) {
+    return errorResponse('room authorization failed', 'FORBIDDEN', 403, env, request);
   }
   if (!region.binding) {
     return errorResponse('region unavailable', 'NO_BINDING', 500, env, request);

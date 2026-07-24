@@ -4,17 +4,17 @@ import { jsonResponse, errorResponse } from '../util/json.js';
 import { resolveRegion } from '../util/regions.js';
 import { presignR2 } from '../util/sigv4.js';
 import { makeSendKey, sanitizeFilename, b64urlEncode } from '../util/keys.js';
-import { checkHmacGate } from '../util/hmacGate.js';
+
+const DIGEST_REGEX = /^[a-f0-9]{64}$/;
 
 const ALLOWED_EXPIRE = new Set([1, 2, 3, 4, 5, 10]);
 
 export async function presignPut(url, request, env) {
   const q = url.searchParams;
 
-  // HMAC gate: only this route is gated, matching lambda.py.
-  const passed = await checkHmacGate(env, q.get('exp'));
-  if (!passed) {
-    return errorResponse('hmac gate failed', 'HMAC_GATE', 403, env, request);
+  const deleteAuth = (q.get('deleteAuth') || '').toLowerCase();
+  if (!DIGEST_REGEX.test(deleteAuth)) {
+    return errorResponse('delete authorization required', 'BAD_INPUT', 400, env, request);
   }
 
   const region = resolveRegion(q.get('region'), env);
@@ -51,6 +51,7 @@ export async function presignPut(url, request, env) {
       'content-type': 'application/octet-stream',
       'x-amz-meta-filename': metaFilename,
       'x-amz-meta-deleteondownload': metaDelete,
+      'x-amz-meta-deleteauth': deleteAuth,
     },
   });
 

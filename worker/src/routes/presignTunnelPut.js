@@ -10,24 +10,19 @@ import {
   sanitizeFilename,
   b64urlEncode,
 } from '../util/keys.js';
-import { checkHmacGate } from '../util/hmacGate.js';
+import { readCapability, verifyScopedCapability } from '../util/capability.js';
 
 export async function presignTunnelPut(url, request, env) {
   const q = url.searchParams;
 
-  // HMAC gate — same gate as presignPut. All upload-initiating routes must be
-  // gated consistently; skipping this check here would allow operators who set
-  // HMAC_SECRET to be bypassed by hitting the tunnel-put endpoint instead.
-  const passed = await checkHmacGate(env, q.get('exp'));
-  if (!passed) {
-    return errorResponse('hmac gate failed', 'HMAC_GATE', 403, env, request);
-  }
-
   const region = resolveRegion(q.get('region'), env);
 
-  const tunnel = q.get('tunnel') || '';
-  if (!/^[A-Za-z0-9]+$/.test(tunnel) || tunnel.length < 1 || tunnel.length > 64) {
+  const tunnel = (q.get('tunnel') || '').toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(tunnel)) {
     return errorResponse('invalid tunnel name', 'BAD_INPUT', 400, env, request);
+  }
+  if (!await verifyScopedCapability(tunnel, readCapability(request))) {
+    return errorResponse('room authorization failed', 'FORBIDDEN', 403, env, request);
   }
 
   const rawName = q.get('filename') || '';

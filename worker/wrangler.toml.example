@@ -4,7 +4,7 @@
 
 name = "__WORKER_NAME__"
 main = "src/index.js"
-compatibility_date = "2024-11-06"
+compatibility_date = "2026-07-24"
 
 # ---------------------------------------------------------------------------
 # Public, non-secret bucket names. The Worker reads these via env and uses
@@ -45,6 +45,28 @@ bucket_name = "__R2_BUCKET_APAC__"
 binding = "CLIPBOARD_KV"
 id      = "__KV_NAMESPACE_ID__"
 
+# Anonymous abuse controls. Namespace ids must be unique within the account.
+[[ratelimits]]
+name = "API_RATE_LIMITER"
+namespace_id = "742001"
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+[[ratelimits]]
+name = "MUTATION_RATE_LIMITER"
+namespace_id = "742002"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+[[ratelimits]]
+name = "EXPENSIVE_RATE_LIMITER"
+namespace_id = "742003"
+  [ratelimits.simple]
+  limit = 5
+  period = 60
+
 # ---------------------------------------------------------------------------
 # Secrets set by `deploy.sh` via `wrangler secret put` (never committed):
 #
@@ -52,7 +74,7 @@ id      = "__KV_NAMESPACE_ID__"
 #   R2_ACCESS_KEY_ID        R2 S3-compatible access key
 #   R2_SECRET_ACCESS_KEY    R2 S3-compatible secret
 #   VT_API_KEY              VirusTotal API key ("none" to disable)
-#   HMAC_SECRET             optional upload-gate HMAC secret ("none" to disable)
+#   TURNSTILE_SECRET        managed-widget secret ("none" to disable)
 #   FRONTEND_ORIGIN         e.g. "https://www.relaysecret.com" or comma-separated list
 #                           "https://www.relaysecret.com,https://relaysecret.com"
 #                           ("devmode" disables the gate entirely)

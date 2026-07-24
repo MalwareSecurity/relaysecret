@@ -124,8 +124,13 @@ Every step is re-runnable. Fix the cause, then re-run `./deploy/deploy.sh --yes`
 ```bash
 cd worker
 printf 'new-vt-key' | wrangler secret put VT_API_KEY
-printf 'new-hmac'   | wrangler secret put HMAC_SECRET
+printf 'new-turnstile-secret' | wrangler secret put TURNSTILE_SECRET
 ```
+
+When enabling Turnstile, set both `TURNSTILE_SITE_KEY` and
+`TURNSTILE_SECRET` in `deploy/config.env`. Register the frontend hostname, apex
+hostname, `localhost`, and `127.0.0.1` on the managed widget. The deploy script
+adds the widget only when both values are configured.
 
 ## Teardown
 

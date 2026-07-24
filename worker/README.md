@@ -27,7 +27,9 @@ src/
     clipboard.js            GET/POST /clipboard/:id
   util/
     sigv4.js                AWS SigV4 presigner (audit surface)
-    hmacGate.js             optional time-bound HMAC validator
+    capability.js           bearer-capability verification
+    abuse.js                route-class rate limiting
+    turnstile.js            optional server-side Siteverify validation
     cors.js                 CORS + referer gate helpers
     json.js                 jsonResponse / errorResponse
     keys.js                 object-key generator + filename helpers
@@ -48,7 +50,7 @@ reading at `presignR2()`.
 
 ## Prerequisites
 
-- Node 18+
+- Node 20.3+
 - `wrangler` v3+ (`npm i -g wrangler`)
 - A Cloudflare account with R2 enabled and an R2 API token
 
@@ -88,7 +90,7 @@ Then set the secrets (values never appear in the file):
 wrangler secret put R2_ACCESS_KEY_ID
 wrangler secret put R2_SECRET_ACCESS_KEY
 wrangler secret put VT_API_KEY        # or literal "none"
-wrangler secret put HMAC_SECRET       # or literal "none"
+wrangler secret put TURNSTILE_SECRET  # or literal "none"
 ```
 
 ## Run locally
@@ -104,9 +106,9 @@ origin gate and get wildcard CORS.
 
 Replace `BASE` with `http://127.0.0.1:8787` for dev, or the deployed URL.
 
-Presign a PUT:
+Presign a PUT (derive a deletion capability and pass its SHA-256 digest):
 ```
-curl "$BASE/presign/put?region=us&expire=1&filename=hello.bin&deleteOnDownload=true"
+curl "$BASE/presign/put?region=us&expire=1&filename=hello.bin&deleteOnDownload=true&deleteAuth=<64-hex>"
 ```
 
 Upload ciphertext using the returned URL — send the exact `requiredHeaders`:
@@ -115,6 +117,7 @@ curl -X PUT --data-binary @ciphertext.bin \
   -H 'content-type: application/octet-stream' \
   -H 'x-amz-meta-filename: aGVsbG8uYmlu' \
   -H 'x-amz-meta-deleteondownload: true' \
+  -H 'x-amz-meta-deleteauth: <64-hex>' \
   "$PRESIGNED_URL"
 ```
 
@@ -128,15 +131,18 @@ Download via the presigned URL:
 curl -o got.bin "$PRESIGNED_GET_URL"
 ```
 
-Delete:
+Delete with the matching bearer capability:
 ```
-curl -X DELETE "$BASE/obj?region=us&key=1day/<hex>"
+curl -X DELETE -H 'X-Relay-Capability: <64-hex>' \
+  "$BASE/obj?region=us&key=1day/<hex>"
 ```
 
 Tunnel upload + list:
 ```
-curl "$BASE/presign/tunnel-put?region=us&tunnel=myroom&filename=a.bin&deleteOnDownload=false"
-curl "$BASE/tunnel/list?region=us&tunnel=myroom"
+curl -H 'X-Relay-Capability: <64-hex>' \
+  "$BASE/presign/tunnel-put?region=us&tunnel=<16-hex>&filename=a.bin&deleteOnDownload=false"
+curl -H 'X-Relay-Capability: <64-hex>' \
+  "$BASE/tunnel/list?region=us&tunnel=<16-hex>"
 ```
 
 VirusTotal lookup (requires `VT_API_KEY != none`):
@@ -147,8 +153,9 @@ curl "$BASE/sha1/3395856ce81f2b7382dee72602f798b642f14140"
 Clipboard round-trip:
 ```
 curl -X POST -H 'content-type: application/json' \
-  -d '{"data":"deadbeef"}' "$BASE/clipboard/abc12345"
-curl "$BASE/clipboard/abc12345"
+  -H 'X-Relay-Capability: <64-hex>' \
+  -d '{"data":"deadbeef"}' "$BASE/clipboard/<16-hex>"
+curl -H 'X-Relay-Capability: <64-hex>' "$BASE/clipboard/<16-hex>"
 ```
 
 ## Deploy
@@ -169,5 +176,5 @@ If you have an hour and want to read every line, this is the order I'd read it i
 3. `src/util/keys.js` + `src/util/regions.js` — ID generation + bucket routing.
 4. `src/util/sigv4.js` — the crypto surface. Comments walk you through every
    step of the SigV4 algorithm.
-5. `src/util/hmacGate.js` — optional time-bound HMAC gate.
+5. `src/util/capability.js`, `abuse.js`, and `turnstile.js` — authorization and abuse controls.
 6. `src/routes/*.js` — each route is small and boring; read them in any order.

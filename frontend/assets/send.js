@@ -5,7 +5,19 @@
 //   2. DECRYPT: when ?obj=...&region=...#tempkey is present, fetch, decrypt
 //               and offer download.
 
-import { encryptBlob, decryptBlob, randomTempKey, createChunkedEncryptContext, decryptChunked, detectFormat, RSv2_HEADER_LEN } from './crypto.js';
+import {
+  encryptBlob,
+  decryptBlob,
+  randomTempKey,
+  deriveCapability,
+  capabilityDigest,
+  createChunkedEncryptContext,
+  multipartChunkCount,
+  chunkedMetadata,
+  decryptChunked,
+  detectFormat,
+  RSv2_HEADER_LEN,
+} from './crypto.js';
 import {
   getUploadPresign, getDownloadPresign, getMultipartPresign, deleteObject, ApiError,
 } from './api.js';
@@ -13,6 +25,7 @@ import {
   $, formatBytes, setStatus, getQueryParams, getFragment,
   safeFilename, copyToClipboard, b64url, readFileBytes,
   createProgressFlow, createUploadProgressBar, streamDecryptedDownload, showImageModal,
+  renderQrCode,
 } from './ui.js';
 
 // XML-escape a string for safe interpolation into XML bodies (e.g. ETag values
@@ -82,6 +95,7 @@ const state = {
   meta: null,          // {objsize, objname, deleteondownload}
   plaintext: null,     // Uint8Array
   origFilename: '',
+  deleteCapability: '',
 };
 
 // ---------------------------------------------------------------- tabs
@@ -197,6 +211,8 @@ $('btnEncrypt').onclick = async () => {
     document.body.classList.add('busy');
 
     state.tempKey = randomTempKey();
+    const deleteCapability = await deriveCapability(state.tempKey, 'object-delete');
+    const deleteAuth = await capabilityDigest(deleteCapability);
     const pass = ($('passInput').value || '').trim();
     const region = $('regionSelect').value;
     const expire = $('expireSelect').value;
@@ -206,23 +222,30 @@ $('btnEncrypt').onclick = async () => {
     if (isFile) lockDropzone();
 
     if (isChunked) {
-      // ---- RSv2 chunked multipart path ----
+      // ---- RSv2 authenticated chunked multipart path ----
       // Steps: 0=Request URLs, 1=Derive key, 2=Encrypt chunks, 3=Upload, 4=Build URL
       const file = state.file;
       const filename = safeFilename(file.name) || 'file.bin';
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const totalChunks = multipartChunkCount(file.size, CHUNK_SIZE);
 
       currentStep = 0;
       flow.start(0);
       setStatus($('encStatus'), 'Initiating multipart upload…');
       const mp = await getMultipartPresign({
         region, expire, filename, chunks: totalChunks, deleteOnDownload: dod,
+        deleteAuth,
       });
       flow.done(0);
 
       currentStep = 1;
       flow.start(1);
-      const ctx = await createChunkedEncryptContext(pass, state.tempKey, CHUNK_SIZE, file.size);
+      const ctx = await createChunkedEncryptContext(
+        pass,
+        state.tempKey,
+        CHUNK_SIZE,
+        file.size,
+        totalChunks,
+      );
       flow.done(1);
 
       currentStep = 2;
@@ -230,10 +253,10 @@ $('btnEncrypt').onclick = async () => {
 
       // --- Encrypt all parts sequentially (crypto context is stateful / ordered) ---
       //
-      // Part 1 carries the 48-byte RSv2 header prepended to the chunk record.
+      // Part 1 carries the 52-byte RSv2 header prepended to the chunk record.
       // To satisfy R2's requirement that all non-trailing parts have equal wire
       // size, we reduce part 1's plaintext slice by RSv2_HEADER_LEN bytes so that:
-      //   part 1 wire = header(48) + lenPrefix(4) + enc(CHUNK_SIZE - 48 + 16 tag)
+      //   part 1 wire = header(52) + lenPrefix(4) + enc(CHUNK_SIZE - 52 + 16 tag)
       //   part N wire =             lenPrefix(4) + enc(CHUNK_SIZE      + 16 tag)
       // Both equal CHUNK_SIZE + 4 + 16 bytes on the wire.
       setStatus($('encStatus'), 'Encrypting…');
@@ -253,6 +276,7 @@ $('btnEncrypt').onclick = async () => {
         bodies.push({ index: i, partNumber: mp.partUrls[i].partNumber, url: mp.partUrls[i].url, body, plainSize: plainChunk.length });
         chunkOffset = end;
       }
+      if (chunkOffset !== file.size) throw new Error('Multipart plan did not cover the complete file.');
       flow.done(2);
 
       currentStep = 3;
@@ -344,7 +368,7 @@ $('btnEncrypt').onclick = async () => {
       flow.start(3);
       setStatus($('encStatus'), 'Requesting upload URL…');
       const presign = await getUploadPresign({
-        region, expire, filename, deleteOnDownload: dod,
+        region, expire, filename, deleteOnDownload: dod, deleteAuth,
       });
       flow.done(3);
 
@@ -390,7 +414,7 @@ function showShareUrl(region, key, tempKey) {
     '&region=' + region + '#',
     mkSpan(tempKey, 'frag'),
   );
-  renderQrCode(url);
+  renderQrCode($('shareQr'), url);
   $('paneResult').classList.remove('hidden');
   $('btnCopyUrl').onclick = async () => {
     const ok = await copyToClipboard(url);
@@ -405,59 +429,6 @@ function showShareUrl(region, key, tempKey) {
     setStatus($('encStatus'), '');
   };
 }
-function renderQrCode(url) {
-  const host = $('shareQr');
-  if (!host) return;
-  host.textContent = '';
-  if (typeof window.qrcode !== 'function') return;
-  // Try increasing type numbers until the data fits. Type 0 = auto-detect
-  // is not supported by this lib, so iterate manually. Error correction
-  // level 'L' keeps capacity high enough for long share URLs.
-  let qr = null;
-  for (let type = 4; type <= 40; type++) {
-    try {
-      const candidate = window.qrcode(type, 'L');
-      candidate.addData(url);
-      candidate.make();
-      qr = candidate;
-      break;
-    } catch (_) { /* too small, try next */ }
-  }
-  if (!qr) return;
-  // Build the SVG as DOM nodes (not innerHTML) — the page's CSP enforces
-  // Trusted Types for script sinks, which blocks innerHTML assignments.
-  const SVG = 'http://www.w3.org/2000/svg';
-  const count = qr.getModuleCount();
-  const cell = 1;
-  const margin = 2;
-  const size = count * cell + margin * 2;
-  const svg = document.createElementNS(SVG, 'svg');
-  svg.setAttribute('xmlns', SVG);
-  svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
-  svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
-  svg.setAttribute('shape-rendering', 'crispEdges');
-  const bg = document.createElementNS(SVG, 'rect');
-  bg.setAttribute('width', '100%');
-  bg.setAttribute('height', '100%');
-  bg.setAttribute('fill', 'white');
-  svg.append(bg);
-  let d = '';
-  for (let r = 0; r < count; r++) {
-    for (let c = 0; c < count; c++) {
-      if (qr.isDark(r, c)) {
-        const x = c * cell + margin;
-        const y = r * cell + margin;
-        d += 'M' + x + ',' + y + 'h' + cell + 'v' + cell + 'h-' + cell + 'z';
-      }
-    }
-  }
-  const path = document.createElementNS(SVG, 'path');
-  path.setAttribute('d', d);
-  path.setAttribute('fill', 'black');
-  svg.append(path);
-  host.append(svg);
-}
-
 function mkSpan(text, cls) {
   const s = document.createElement('span');
   s.className = cls;
@@ -471,6 +442,10 @@ async function initDecryptFromUrl() {
   if (!q.obj) return false;
   state.objKey = q.obj;
   state.region = q.region || 'us';
+  const fragment = (getFragment() || '').trim();
+  if (fragment) {
+    state.deleteCapability = await deriveCapability(fragment, 'object-delete');
+  }
   showTab('decrypt');
   $('btnDecrypt').disabled = false;
   setStatus($('decStatus'), 'Fetching metadata…');
@@ -480,7 +455,7 @@ async function initDecryptFromUrl() {
     $('decMeta').textContent =
       'File: ' + state.origFilename + ' · ' + formatBytes(state.meta.objsize) +
       ' · region ' + state.region.toUpperCase() +
-      (state.meta.deleteondownload ? ' · delete-on-download' : '');
+      (state.meta.deleteondownload ? ' · best-effort delete after decryption' : '');
     setStatus($('decStatus'), 'Ready. Enter password (if any) and click Decrypt.');
   } catch (err) {
     const msg = err instanceof ApiError && err.status === 404
@@ -509,24 +484,20 @@ $('btnDecrypt').onclick = async () => {
     const pass = ($('decPassInput').value || '').trim();
     const presignedUrl = state.meta.url;
 
-    // Fetch the first 48 bytes to detect RSv1 vs RSv2.
+    // Fetch enough bytes to detect RSv1/RSv2 and parse the chunked header.
     currentStep = 1;
     flow.start(1);
     setStatus($('decStatus'), 'Detecting format…');
-    const headRes = await fetch(presignedUrl, { headers: { Range: 'bytes=0-47' } });
+    const headRes = await fetch(presignedUrl, { headers: { Range: 'bytes=0-51' } });
     if (!headRes.ok) throw new Error('Header fetch failed: HTTP ' + headRes.status);
     const headerBytes = new Uint8Array(await headRes.arrayBuffer());
     const format = detectFormat(headerBytes);
 
     if (format === 'v2') {
-      // ---- RSv2 chunked decrypt — stream directly to disk ----
+      // ---- Chunked decrypt — RSv2 authenticates the complete structure. ----
       setStatus($('decStatus'), 'Downloading & decrypting…');
 
-      // Parse chunkSize and totalSize from the RSv2 header for the progress bar.
-      const dv = new DataView(headerBytes.buffer);
-      const chunkSize = dv.getUint32(8, true);
-      const totalSize = dv.getUint32(16, true) * 0x100000000 + dv.getUint32(12, true);
-      const totalChunks = chunkSize > 0 ? Math.ceil(totalSize / chunkSize) : 1;
+      const { totalSize, totalChunks } = chunkedMetadata(headerBytes);
 
       downloadBar = createUploadProgressBar($('downloadBar'), totalSize, { partLabel: 'Chunk' });
       downloadBar.show();
@@ -542,7 +513,14 @@ $('btnDecrypt').onclick = async () => {
       // Stream chunks directly to disk — no full-file buffer in JS memory.
       let totalDecrypted = 0;
       let chunksDone = 0;
-      const chunkGen = decryptChunked(headerBytes, pass, frag, fetchRange);
+      const chunkGen = decryptChunked(
+        headerBytes,
+        pass,
+        frag,
+        fetchRange,
+        undefined,
+        state.meta.objsize,
+      );
       const { blobUrl, usedPicker } = await streamDecryptedDownload(
         state.origFilename,
         chunkGen,
@@ -564,8 +542,9 @@ $('btnDecrypt').onclick = async () => {
       if (usedPicker) {
         $('decResult').classList.remove('hidden');
         setStatus($('decStatus'), 'Decrypted and saved.', 'ok');
+        configureDeleteButton();
         if (state.meta.deleteondownload) {
-          deleteObject({ region: state.region, key: state.objKey }).catch(() => {});
+          await deleteCurrentObject(true);
         }
         return;
       }
@@ -597,7 +576,7 @@ $('btnDecrypt').onclick = async () => {
     setStatus($('decStatus'), 'Decrypted.', 'ok');
 
     if (state.meta.deleteondownload) {
-      deleteObject({ region: state.region, key: state.objKey }).catch(() => {});
+      await deleteCurrentObject(true);
     }
   } catch (err) {
     console.error(err);
@@ -610,8 +589,8 @@ $('btnDecrypt').onclick = async () => {
 };
 
 async function showDecrypted() {
-  const plain = state.plaintext;       // null for streamed RSv2 downloads
-  const blobUrl = state._blobUrl;      // set for fallback RSv2 path
+  const plain = state.plaintext;       // null for streamed chunked downloads
+  const blobUrl = state._blobUrl;      // set for the chunked fallback path
   const filename = state.origFilename;
   const isMessage = filename === MSG_FILENAME;
   $('decResult').classList.remove('hidden');
@@ -640,7 +619,7 @@ async function showDecrypted() {
       img.onclick = () => showImageModal(url);
     }
   } else if (blobUrl) {
-    // RSv2 fallback path — blob URL from ReadableStream, no copy in JS memory.
+    // Chunked fallback path — blob URL from ReadableStream, no copy in JS memory.
     const a = $('decDownload');
     a.href = blobUrl;
     a.download = filename;
@@ -649,18 +628,42 @@ async function showDecrypted() {
     a.click();
   }
 
-  if (!state.meta.deleteondownload) {
-    const btn = $('btnDelete');
-    btn.classList.remove('hidden');
-    btn.onclick = async () => {
-      try {
-        await deleteObject({ region: state.region, key: state.objKey });
-        setStatus($('decStatus'), 'Deleted from server.', 'ok');
-        btn.disabled = true;
-      } catch (e) {
-        setStatus($('decStatus'), 'Delete failed.', 'err');
-      }
-    };
+  configureDeleteButton();
+}
+
+function configureDeleteButton() {
+  const btn = $('btnDelete');
+  btn.classList.remove('hidden');
+  btn.disabled = false;
+  btn.textContent = 'Delete from server';
+  btn.onclick = () => deleteCurrentObject(false);
+}
+
+async function deleteCurrentObject(automatic) {
+  const btn = $('btnDelete');
+  try {
+    await deleteObject({
+      region: state.region,
+      key: state.objKey,
+      capability: state.deleteCapability,
+    });
+    btn.disabled = true;
+    btn.textContent = 'Deleted';
+    setStatus(
+      $('decStatus'),
+      automatic ? 'Decrypted; server copy deleted.' : 'Deleted from server.',
+      'ok',
+    );
+    return true;
+  } catch {
+    setStatus(
+      $('decStatus'),
+      automatic
+        ? 'Decrypted, but automatic deletion failed. Use “Delete from server” to retry.'
+        : 'Delete failed.',
+      automatic ? 'warn' : 'err',
+    );
+    return false;
   }
 }
 

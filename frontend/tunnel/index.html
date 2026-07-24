@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/config.js"></script>
+  <!-- TURNSTILE_SCRIPT_PLACEHOLDER -->
+  <script src="/assets/qrcode.js"></script>
 </head>
 <body>
   <span id="forkongithub"><a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">Fork me on GitHub</a></span>
@@ -25,8 +27,45 @@
 
   <main class="page">
 
+    <!-- ── Create / join ───────────────────────────────────── -->
+    <div class="card stack" id="roomEntry">
+      <h2>Create or join an encrypted room</h2>
+      <p class="muted">RelaySecret generates eight random words for each room. Share all eight words, the URL, or the QR code with the people you trust.</p>
+
+      <button id="btnCreateRoom" class="primary" type="button">Create a secure room</button>
+
+      <div class="field">
+        <label for="roomCodeInput">Join with an eight-word room code</label>
+        <input id="roomCodeInput" type="text" autocomplete="off" autocapitalize="none"
+               spellcheck="false" placeholder="word word word word word word word word">
+      </div>
+      <button id="btnJoinRoom" type="button">Join room</button>
+      <p id="roomEntryStatus" class="muted" role="status" aria-live="polite"></p>
+    </div>
+
+    <!-- ── Room sharing ────────────────────────────────────── -->
+    <div class="card stack url-result room-workspace hidden" id="roomShare">
+      <h2>Share this room</h2>
+      <p class="muted">Anyone with either the complete code or URL can access this room. Send it through a trusted channel.</p>
+
+      <div class="callout">
+        <strong>Eight-word room code</strong>
+        <p id="roomCodeDisplay" class="room-code" aria-label="Eight-word room code"></p>
+        <button id="btnCopyRoomCode" type="button">Copy code</button>
+      </div>
+
+      <div class="code-block" id="roomUrlDisplay" aria-label="Room URL"></div>
+      <button id="btnCopyRoomUrl" type="button">Copy room URL</button>
+
+      <div class="qr-wrap">
+        <div id="roomQr" class="qr-code" role="img" aria-label="QR code for the room URL"></div>
+        <p class="qr-hint muted">Scan with a phone camera to join this room.</p>
+      </div>
+      <p id="roomShareStatus" class="muted" role="status" aria-live="polite"></p>
+    </div>
+
     <!-- ── File list ──────────────────────────────────────── -->
-    <div class="card stack">
+    <div class="card stack room-workspace hidden">
       <h2>Files in this tunnel</h2>
       <p class="muted" id="tunnelInfo">Loading…</p>
 
@@ -66,7 +105,7 @@
     </div>
 
     <!-- ── Upload ─────────────────────────────────────────── -->
-    <div class="card stack">
+    <div class="card stack room-workspace hidden">
       <h2>Upload to this tunnel</h2>
       <p class="muted">Files are encrypted in your browser with the tunnel key before upload. Large files are streamed in encrypted chunks — no fixed size limit.</p>
 
@@ -87,7 +126,10 @@
 
       <div class="checkbox-row">
         <input type="checkbox" id="dodInput">
-        <label for="dodInput">Delete on first download</label>
+        <label for="dodInput">Delete after successful decryption (best effort)</label>
+      </div>
+      <div class="turnstile-shell" data-configured="<TURNSTILE_ENABLED_PLACEHOLDER>">
+        <div class="cf-turnstile" data-sitekey="<TURNSTILE_SITE_KEY_PLACEHOLDER>" data-action="turnstile-spin-v2"></div>
       </div>
 
       <div class="row">

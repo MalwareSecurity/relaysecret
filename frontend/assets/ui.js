@@ -57,6 +57,57 @@ export async function copyToClipboard(text) {
   }
 }
 
+// Render a share URL as a QR code using the locally hosted qrcode.js library.
+export function renderQrCode(host, url) {
+  if (!host) return;
+  host.textContent = '';
+  if (typeof window.qrcode !== 'function') return;
+
+  let qr = null;
+  for (let type = 4; type <= 40; type++) {
+    try {
+      const candidate = window.qrcode(type, 'L');
+      candidate.addData(url);
+      candidate.make();
+      qr = candidate;
+      break;
+    } catch (_) { /* Data did not fit; try the next QR version. */ }
+  }
+  if (!qr) return;
+
+  const SVG = 'http://www.w3.org/2000/svg';
+  const count = qr.getModuleCount();
+  const margin = 2;
+  const size = count + margin * 2;
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('xmlns', SVG);
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+  svg.setAttribute('shape-rendering', 'crispEdges');
+
+  const bg = document.createElementNS(SVG, 'rect');
+  bg.setAttribute('width', '100%');
+  bg.setAttribute('height', '100%');
+  bg.setAttribute('fill', 'white');
+  svg.append(bg);
+
+  let pathData = '';
+  for (let row = 0; row < count; row++) {
+    for (let column = 0; column < count; column++) {
+      if (qr.isDark(row, column)) {
+        const x = column + margin;
+        const y = row + margin;
+        pathData += `M${x},${y}h1v1h-1z`;
+      }
+    }
+  }
+  const path = document.createElementNS(SVG, 'path');
+  path.setAttribute('d', pathData);
+  path.setAttribute('fill', 'black');
+  svg.append(path);
+  host.append(svg);
+}
+
 // Convert a byte array to / from a hex string. Used for the clipboard
 // transport (KV stores hex so we don't have to think about binary JSON).
 export function bytesToHex(bytes) {

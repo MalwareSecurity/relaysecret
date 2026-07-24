@@ -26,6 +26,11 @@ kv_create_namespace() {
   fi
 
   echo "  - creating KV namespace '${title}'" >&2
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    echo "[dry-run] cf_api POST /accounts/.../storage/kv/namespaces" >&2
+    printf '%s' "00000000000000000000000000000000"
+    return 0
+  fi
   local body result
   body="$(jq -cn --arg t "$title" '{title:$t}')"
   result="$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" "$body")"

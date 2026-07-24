@@ -36,7 +36,7 @@ pages_deploy() {
     echo "[dry-run] wrangler pages deploy ${dir} --project-name=${project} --branch=main --commit-dirty=true"
     return 0
   fi
-  wrangler pages deploy "$dir" \
+  wrangler_cli pages deploy "$dir" \
       --project-name="$project" \
       --branch=main \
       --commit-dirty=true

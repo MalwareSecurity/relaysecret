@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/config.js"></script>
+  <!-- TURNSTILE_SCRIPT_PLACEHOLDER -->
   <script src="/assets/qrcode.js"></script>
 </head>
 <body>
@@ -91,7 +92,10 @@
         </div>
         <div class="checkbox-row">
           <input type="checkbox" id="dodInput">
-          <label for="dodInput">Delete on first download</label>
+          <label for="dodInput">Delete after successful decryption (best effort)</label>
+        </div>
+        <div class="turnstile-shell" data-configured="<TURNSTILE_ENABLED_PLACEHOLDER>">
+          <div class="cf-turnstile" data-sitekey="<TURNSTILE_SITE_KEY_PLACEHOLDER>" data-action="turnstile-spin-v2"></div>
         </div>
         <div class="row">
           <button id="btnEncrypt" class="primary" type="button" disabled>Encrypt &amp; Upload</button>

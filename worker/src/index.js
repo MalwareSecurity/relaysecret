@@ -6,6 +6,8 @@
 
 import { handlePreflight, refererGate } from './util/cors.js';
 import { errorResponse } from './util/json.js';
+import { enforceRateLimits } from './util/abuse.js';
+import { enforceTurnstile, requiresHumanCheck } from './util/turnstile.js';
 
 import { presignPut } from './routes/presignPut.js';
 import { presignTunnelPut } from './routes/presignTunnelPut.js';
@@ -30,6 +32,14 @@ export default {
     if (blocked) return blocked;
 
     try {
+      const rateLimited = await enforceRateLimits(request, env, pathname, method);
+      if (rateLimited) return rateLimited;
+
+      if (requiresHumanCheck(pathname, method)) {
+        const challengeFailed = await enforceTurnstile(request, env);
+        if (challengeFailed) return challengeFailed;
+      }
+
       // --- presign routes ------------------------------------------------
       if (method === 'GET' && pathname === '/presign/put') {
         return await presignPut(url, request, env);

@@ -38,10 +38,10 @@ export async function makeTunnelKey(tunnelHash, seed) {
   return `1day/${tunnelHash}/${hex}`;
 }
 
-// tunnelHash = first 16 hex chars of sha256(tunnelName). Keeps room names
-// out of R2 object listings and shortens the path.
-export async function tunnelHash(name) {
-  const full = await sha256Hex(name);
+// tunnelHash = first 16 hex chars of sha256(publicRoomId). Keeps the public
+// capability-derived handle out of R2 listings and shortens the path.
+export async function tunnelHash(publicRoomId) {
+  const full = await sha256Hex(publicRoomId);
   return full.slice(0, 16);
 }
 

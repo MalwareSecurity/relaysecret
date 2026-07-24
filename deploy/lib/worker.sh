@@ -42,7 +42,7 @@ _wrangler_run() {
     echo "[dry-run] (cd ${dir} && wrangler $*)"
     return 0
   fi
-  (cd "$dir" && wrangler "$@")
+  (cd "$dir" && wrangler_cli "$@")
 }
 
 # worker_deploy WORKER_DIR
@@ -63,7 +63,7 @@ worker_put_secret() {
     return 0
   fi
   # shellcheck disable=SC2031
-  (cd "$dir" && printf '%s' "$value" | wrangler secret put "$name")
+  (cd "$dir" && printf '%s' "$value" | wrangler_cli secret put "$name")
 }
 
 # worker_delete_secret WORKER_DIR NAME
@@ -74,7 +74,7 @@ worker_delete_secret() {
     echo "[dry-run] (cd ${dir} && wrangler secret delete ${name} --force)"
     return 0
   fi
-  (cd "$dir" && wrangler secret delete "$name" --force) || true
+  (cd "$dir" && wrangler_cli secret delete "$name" --force) || true
 }
 
 # worker_bind_domain API_HOST WORKER_NAME ZONE_ID

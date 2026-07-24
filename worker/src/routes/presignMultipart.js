@@ -13,7 +13,7 @@ import { jsonResponse, errorResponse } from '../util/json.js';
 import { resolveRegion } from '../util/regions.js';
 import { presignR2, signS3Request } from '../util/sigv4.js';
 import { makeSendKey, makeTunnelKey, tunnelHash, sanitizeFilename, b64urlEncode } from '../util/keys.js';
-import { checkHmacGate } from '../util/hmacGate.js';
+import { readCapability, verifyScopedCapability } from '../util/capability.js';
 
 const ALLOWED_EXPIRE = new Set([1, 2, 3, 4, 5, 10]);
 // 500 parts × 128 MB = 64 GB — far beyond any practical browser upload.
@@ -21,6 +21,7 @@ const ALLOWED_EXPIRE = new Set([1, 2, 3, 4, 5, 10]);
 // unauthenticated request would let anyone trigger ~60 000 WebCrypto ops +
 // a real CreateMultipartUpload R2 call per request, making this a cheap DoS.
 const MAX_PARTS = 500;
+const DIGEST_REGEX = /^[a-f0-9]{64}$/;
 
 async function createMultipartUpload(env, region, key, metaHeaders) {
   const { amzDate, authorization } = await signS3Request({
@@ -67,13 +68,6 @@ async function createMultipartUpload(env, region, key, metaHeaders) {
 export async function presignMultipartInit(url, request, env) {
   const q = url.searchParams;
 
-  // HMAC gate — same gate as presignPut / presignTunnelPut. All upload-initiating
-  // routes must be gated consistently so that setting HMAC_SECRET actually works.
-  const passed = await checkHmacGate(env, q.get('exp'));
-  if (!passed) {
-    return errorResponse('hmac gate failed', 'HMAC_GATE', 403, env, request);
-  }
-
   const region = resolveRegion(q.get('region'), env);
 
   // chunk count
@@ -94,10 +88,18 @@ export async function presignMultipartInit(url, request, env) {
 
   const deleteOnDownload = (q.get('deleteOnDownload') || 'false').toLowerCase() === 'true';
   const isTunnel = q.has('tunnel');
-  const tunnel = (q.get('tunnel') || '').trim();
+  const tunnel = (q.get('tunnel') || '').trim().toLowerCase();
 
-  if (isTunnel && (!/^[A-Za-z0-9]+$/.test(tunnel) || tunnel.length < 1 || tunnel.length > 64)) {
+  if (isTunnel && !/^[a-f0-9]{16}$/.test(tunnel)) {
     return errorResponse('invalid tunnel name', 'BAD_INPUT', 400, env, request);
+  }
+  if (isTunnel && !await verifyScopedCapability(tunnel, readCapability(request))) {
+    return errorResponse('room authorization failed', 'FORBIDDEN', 403, env, request);
+  }
+
+  const deleteAuth = (q.get('deleteAuth') || '').toLowerCase();
+  if (!isTunnel && !DIGEST_REGEX.test(deleteAuth)) {
+    return errorResponse('delete authorization required', 'BAD_INPUT', 400, env, request);
   }
 
   // Generate the object key
@@ -115,6 +117,7 @@ export async function presignMultipartInit(url, request, env) {
     'x-amz-meta-filename': metaFilename,
     'x-amz-meta-deleteondownload': metaDelete,
   };
+  if (!isTunnel) metaHeaders['x-amz-meta-deleteauth'] = deleteAuth;
 
   // Step 1: Create multipart upload on R2
   let uploadId;

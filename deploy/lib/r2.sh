@@ -62,7 +62,7 @@ r2_apply_cors() {
         allowed: {
           origins:  $origins,
           methods:  ["GET","PUT","POST","HEAD"],
-          headers:  ["content-type","x-amz-meta-filename","x-amz-meta-deleteondownload","x-amz-content-sha256"]
+          headers:  ["content-type","x-amz-meta-filename","x-amz-meta-deleteondownload","x-amz-meta-deleteauth","x-amz-content-sha256"]
         },
         exposeHeaders: ["etag","content-length","content-type"],
         maxAgeSeconds: 3600

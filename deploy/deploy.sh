@@ -124,6 +124,13 @@ info()  { echo "   $*"; }
 warn()  { echo "!! $*" >&2; }
 die()   { echo "!! $*" >&2; exit 1; }
 
+# Prefer a globally installed Wrangler, but support the repository-local v4
+# dependency used by the test/deployment toolchain.
+WRANGLER_BIN=""
+wrangler_cli() {
+  "$WRANGLER_BIN" "$@"
+}
+
 confirm() {
   local prompt="$1"
   if [[ "$YES" -eq 1 ]]; then
@@ -159,7 +166,8 @@ set -a; source "$CONFIG_FILE"; set +a
 
 # defaults
 : "${VT_API_KEY:=none}"
-: "${HMAC_SECRET:=none}"
+: "${TURNSTILE_SITE_KEY:=none}"
+: "${TURNSTILE_SECRET:=none}"
 : "${PAGES_PROJECT:=relaysecret}"
 : "${WORKER_NAME:=relaysecret}"
 : "${R2_BUCKET_US:=relaysecret-us}"
@@ -176,12 +184,19 @@ for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DOMAIN FRONTEND_HOST API_HOS
   fi
 done
 
-for bin in curl jq openssl wrangler; do
+for bin in curl jq openssl; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     die "required binary not found in PATH: ${bin}"
   fi
 done
-info "wrangler: $(wrangler --version 2>/dev/null | head -n1)"
+if command -v wrangler >/dev/null 2>&1; then
+  WRANGLER_BIN="$(command -v wrangler)"
+elif [[ -x "${REPO_ROOT}/node_modules/.bin/wrangler" ]]; then
+  WRANGLER_BIN="${REPO_ROOT}/node_modules/.bin/wrangler"
+else
+  die "Wrangler v4 is required; run 'pnpm install' or install it globally"
+fi
+info "wrangler: $(wrangler_cli --version 2>/dev/null | head -n1)"
 
 if [[ -z "${SEED}" ]]; then
   SEED="$(openssl rand -hex 32)"
@@ -243,7 +258,7 @@ fi
 info "zone id: ${CLOUDFLARE_ZONE_ID}"
 
 export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_ZONE_ID DOMAIN FRONTEND_HOST API_HOST \
-       VT_API_KEY HMAC_SECRET SEED PAGES_PROJECT WORKER_NAME \
+       VT_API_KEY TURNSTILE_SITE_KEY TURNSTILE_SECRET SEED PAGES_PROJECT WORKER_NAME \
        R2_BUCKET_US R2_BUCKET_EU R2_BUCKET_APAC
 
 # ---------- TEARDOWN path ----------
@@ -299,6 +314,15 @@ else
   FRONTEND_ORIGIN="https://${FRONTEND_HOST}"
 fi
 unset _apex_origin
+
+if [[ "${TURNSTILE_SITE_KEY}" == "none" && "${TURNSTILE_SECRET}" != "none" ]] ||
+   [[ "${TURNSTILE_SITE_KEY}" != "none" && "${TURNSTILE_SECRET}" == "none" ]]; then
+  die "TURNSTILE_SITE_KEY and TURNSTILE_SECRET must either both be set or both be 'none'"
+fi
+if [[ "${TURNSTILE_SITE_KEY}" != "none" ]] &&
+   [[ ! "${TURNSTILE_SITE_KEY}" =~ ^[A-Za-z0-9_-]{10,128}$ ]]; then
+  die "TURNSTILE_SITE_KEY contains invalid characters"
+fi
 
 # ---------- R2 ----------
 if step_enabled r2; then
@@ -373,9 +397,12 @@ EOF
   worker_put_secret "$WORKER_DIR" R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY"
   worker_put_secret "$WORKER_DIR" R2_ACCOUNT_ID        "$CLOUDFLARE_ACCOUNT_ID"
   worker_put_secret "$WORKER_DIR" VT_API_KEY           "$VT_API_KEY"
-  worker_put_secret "$WORKER_DIR" HMAC_SECRET          "$HMAC_SECRET"
+  worker_put_secret "$WORKER_DIR" TURNSTILE_SECRET     "$TURNSTILE_SECRET"
   worker_put_secret "$WORKER_DIR" FRONTEND_ORIGIN      "$FRONTEND_ORIGIN"
   worker_put_secret "$WORKER_DIR" SEED                 "$SEED"
+  # Authorization now uses scoped capabilities instead of a public,
+  # long-lived HMAC token. Clean up that obsolete secret during upgrades.
+  worker_delete_secret "$WORKER_DIR" HMAC_SECRET
 
   banner "Worker: custom domain ${API_HOST}"
   worker_bind_domain "$API_HOST" "$WORKER_NAME" "$CLOUDFLARE_ZONE_ID"
@@ -395,7 +422,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 info "build dir: ${BUILD_DIR}"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  info "[dry-run] would cp -R ${FRONTEND_DIR}/ ${BUILD_DIR}/, substitute worker origin + HMAC exp token"
+  info "[dry-run] would copy the frontend and substitute Worker + Turnstile configuration"
 else
   # -a preserves timestamps and permissions. Trailing "/." copies contents.
   cp -a "${FRONTEND_DIR}/." "${BUILD_DIR}/"
@@ -417,37 +444,36 @@ else
     warn "missing ${HEADERS_FILE} — skipping CSP substitution"
   fi
 
-  # Generate the HMAC upload token for the HMAC gate.
-  # When HMAC_SECRET is "none" we embed an empty string — the Worker ignores it.
-  # When set, we mint a token that expires 3 years from now so operators don't
-  # need to redeploy just to refresh the token. Rotate by changing HMAC_SECRET
-  # and redeploying both the worker (new secret) and pages (new token).
-  #
-  # Token format: "<unix_expiry>.<hex_hmac_sha256(secret, ascii_expiry)>"
-  # This matches the format validated by worker/src/util/hmacGate.js.
-  UPLOAD_EXP_VALUE=""
-  if [[ "${HMAC_SECRET}" != "none" && -n "${HMAC_SECRET}" ]]; then
-    EXP_TS=$(( $(date +%s) + 3 * 365 * 24 * 3600 ))
-    EXP_HMAC="$(printf '%s' "${EXP_TS}" | \
-      openssl dgst -sha256 -hmac "${HMAC_SECRET}" -hex | \
-      awk '{print $NF}')"
-    UPLOAD_EXP_VALUE="${EXP_TS}.${EXP_HMAC}"
-    info "generated uploadExp token (expires $(date -d "@${EXP_TS}" '+%Y-%m-%d' 2>/dev/null || date -r "${EXP_TS}" '+%Y-%m-%d' 2>/dev/null || echo "unix:${EXP_TS}"))"
+  TURNSTILE_ENABLED_VALUE="false"
+  TURNSTILE_SCRIPT_VALUE=""
+  if [[ "${TURNSTILE_SITE_KEY}" != "none" && -n "${TURNSTILE_SITE_KEY}" ]]; then
+    TURNSTILE_ENABLED_VALUE="true"
+    TURNSTILE_SCRIPT_VALUE='<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
+    info "Turnstile widget enabled"
   else
-    info "HMAC_SECRET is 'none' — uploadExp token will be empty (gate disabled)"
+    info "Turnstile is disabled; Worker rate limits remain active"
   fi
 
   if [[ -f "$CONFIG_JS" ]]; then
     tmp="$(mktemp)"
     sed -e "s|<WORKER_ORIGIN_PLACEHOLDER>|https://${API_HOST}|g" \
         -e "s|__API_HOST__|${API_HOST}|g" \
-        -e "s|<UPLOAD_EXP_PLACEHOLDER>|${UPLOAD_EXP_VALUE}|g" \
+        -e "s|<TURNSTILE_SITE_KEY_PLACEHOLDER>|${TURNSTILE_SITE_KEY}|g" \
         "$CONFIG_JS" > "$tmp"
     mv "$tmp" "$CONFIG_JS"
     info "patched ${CONFIG_JS}"
   else
     warn "missing ${CONFIG_JS} — skipping JS substitution"
   fi
+
+  while IFS= read -r html_file; do
+    tmp="$(mktemp)"
+    sed -e "s|<!-- TURNSTILE_SCRIPT_PLACEHOLDER -->|${TURNSTILE_SCRIPT_VALUE}|g" \
+        -e "s|<TURNSTILE_SITE_KEY_PLACEHOLDER>|${TURNSTILE_SITE_KEY}|g" \
+        -e "s|<TURNSTILE_ENABLED_PLACEHOLDER>|${TURNSTILE_ENABLED_VALUE}|g" \
+        "$html_file" > "$tmp"
+    mv "$tmp" "$html_file"
+  done < <(find "$BUILD_DIR" -type f -name '*.html')
 
   # Cache busting: Cloudflare Pages forces a 4h max-age on /assets/* and
   # ignores Cache-Control overrides for that path. Stamp every asset URL in
@@ -476,8 +502,8 @@ PY
   if grep -RIn '<WORKER_ORIGIN_PLACEHOLDER>' "$BUILD_DIR" >/dev/null 2>&1; then
     die "build sanity check failed: <WORKER_ORIGIN_PLACEHOLDER> still present in ${BUILD_DIR}"
   fi
-  if grep -RIn '<UPLOAD_EXP_PLACEHOLDER>' "$BUILD_DIR" >/dev/null 2>&1; then
-    die "build sanity check failed: <UPLOAD_EXP_PLACEHOLDER> still present in ${BUILD_DIR}"
+  if grep -RInE 'TURNSTILE_(SCRIPT|SITE_KEY|ENABLED)_PLACEHOLDER' "$BUILD_DIR" >/dev/null 2>&1; then
+    die "build sanity check failed: Turnstile placeholder still present in ${BUILD_DIR}"
   fi
 fi
 

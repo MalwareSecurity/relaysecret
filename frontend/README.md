@@ -14,7 +14,9 @@ frontend/
 │   ├── tokens.css          # design tokens (verbatim from docs/DESIGN_TOKENS.css)
 │   ├── app.css             # page-specific layout on top of tokens
 │   ├── config.js           # window.CONFIG.workerUrl — change per environment
-│   ├── crypto.js           # AES-GCM-256 + PBKDF2 600k + RSv1 blob format
+│   ├── crypto.js           # AES-GCM-256 + PBKDF2 600k + RSv1/RSv2 formats
+│   ├── room-code.js        # unbiased eight-word room-code generation/validation
+│   ├── eff_large_wordlist.txt
 │   ├── api.js              # fetch wrappers for every Worker route
 │   ├── ui.js               # DOM helpers, byte formatter, status lines
 │   ├── send.js             # index.html controller
@@ -42,7 +44,10 @@ all major browsers, so plain http://localhost works.
 Edit `assets/config.js`:
 
 ```js
-window.CONFIG = { workerUrl: 'http://localhost:8787' };
+window.CONFIG = {
+  workerUrl: 'http://localhost:8787',
+  turnstileSiteKey: 'none',
+};
 ```
 
 Then start the Worker with `wrangler dev` in the worker project. Make sure the
@@ -81,12 +86,22 @@ Every ciphertext we produce has this layout:
 This is **not** compatible with the archived AWS site's `Salted__` + AES-CBC
 format. Clean launch — no migration needed.
 
-## File size ceiling
+## Large files and RSv2
 
-WebCrypto's `subtle.encrypt` needs the whole plaintext in memory. We cap files
-at **2 GB** in the UI; actual ceiling depends on how much RAM the browser will
-hand out to a tab. Uploads use `fetch(url, { body: Uint8Array })`, which
-streams to the network.
+Files above 500 MB use authenticated RSv2 chunks. The 52-byte header declares
+the total plaintext size and chunk count. Every AES-GCM chunk authenticates the
+complete header and its own index as associated data, and decryption verifies
+the final ciphertext object size.
+
+## Room codes
+
+Tunnel rooms use eight independently generated words from EFF's 7,776-word
+long list, yielding about 103 bits of entropy. The code is included only in the
+URL fragment, may be entered with spaces, and is validated locally
+before the app derives its encryption key and authorization capability.
+
+The bundled list is unmodified. Attribution and licensing are in
+`assets/eff_large_wordlist.LICENSE.txt`.
 
 ## CSP contract
 
@@ -94,17 +109,19 @@ streams to the network.
 
 ```
 default-src 'self';
-script-src  'self';
+script-src  'self' https://challenges.cloudflare.com;
 style-src   'self';
 connect-src 'self' <WORKER_ORIGIN>;
 img-src     'self' data: blob:;
 font-src    'self';
+frame-src   https://challenges.cloudflare.com;
 frame-ancestors 'none';
 base-uri 'none';
 ```
 
-`blob:` is required for the "Save decrypted file" link (createObjectURL). No
-inline scripts, no inline styles, no third-party origins. If you add a new
+`blob:` is required for the "Save decrypted file" link (createObjectURL).
+Cloudflare Challenges is the only optional third-party origin and is loaded
+only when Turnstile is configured. There are no inline scripts. If you add a new
 Worker endpoint on a new host, update `connect-src` too.
 
 ## Audit order for a reviewer
@@ -117,7 +134,8 @@ Read in this order:
 3. `assets/config.js` + `_headers` — confirm CSP pins connect-src to only the
    one Worker origin.
 4. `assets/send.js` — encrypt and decrypt flows; the share URL format.
-5. `assets/tunnel.js` — room bootstrap (sha256 derivation) and list/upload/decrypt.
+5. `assets/room-code.js` + `assets/tunnel.js` — secure room generation,
+   bootstrap, and list/upload/decrypt.
 6. `assets/clipboard.js` — KV transport + hex encoding.
 7. `assets/ui.js`, `assets/app.css`, `assets/tokens.css` — UI plumbing.
 8. `index.html`, `tunnel/index.html`, `clipboard/index.html` — markup only,

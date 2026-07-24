@@ -1,11 +1,11 @@
 // tunnel.js — controller for /tunnel/. Room mode.
 //
-// URL format: /tunnel/?tunnelid=<16hex>#<tempkey>
-//   - tempkey = sha256(userRoomName) hex (64 chars, stays in fragment)
-//   - tunnelid = first 16 chars of sha256(tempkey) — a public handle the
-//     Worker uses to scope R2 keys. The room name itself is never sent.
+// URL format: /tunnel/?tunnelid=<16hex>#<eight-word-room-code>
+//   - the generated room code stays in the URL fragment
+//   - tempkey = SHA-256(normalized room code)
+//   - tunnelid derives from a separate room capability
 //
-// If the URL has no tunnelid we prompt for a room name and redirect.
+// If the URL has no room, the page offers secure generation or manual entry.
 
 // XML-escape a string for safe interpolation into XML bodies (e.g. ETag values
 // in CompleteMultipartUpload). R2/S3 ETags are typically quoted MD5 hex strings
@@ -20,14 +20,30 @@ function xmlEscape(s) {
     .replace(/'/g, '&apos;');
 }
 
-import { encryptBlob, decryptBlob, sha256Hex, createChunkedEncryptContext, decryptChunked, detectFormat, RSv2_HEADER_LEN } from './crypto.js';
+import {
+  encryptBlob,
+  decryptBlob,
+  deriveCapability,
+  capabilityId,
+  createChunkedEncryptContext,
+  multipartChunkCount,
+  chunkedMetadata,
+  decryptChunked,
+  detectFormat,
+  RSv2_HEADER_LEN,
+} from './crypto.js';
+import {
+  generateRoomCode,
+  roomTempKey,
+  validateRoomCode,
+} from './room-code.js';
 import {
   getTunnelUploadPresign, getDownloadPresign, getMultipartPresign, listTunnel, deleteObject,
 } from './api.js';
 import {
   $, formatBytes, setStatus, getQueryParams, getFragment,
   safeFilename, readFileBytes, createProgressFlow, createUploadProgressBar,
-  streamDecryptedDownload, showImageModal,
+  streamDecryptedDownload, showImageModal, copyToClipboard, renderQrCode,
 } from './ui.js';
 
 const REGION = 'us'; // Tunnels are pinned to us for now (matches backend default).
@@ -36,6 +52,9 @@ const CHUNK_SIZE      = 128 * 1024 * 1024;  // 128 MB
 
 const state = {
   tunnelId: '',
+  roomCode: '',
+  tempKey: '',
+  capability: '',
   file: null,
   ready: false, // true once we have a valid tunnelid + tempkey
   currentDecrypt: null, // { file, blobUrl, rowEl } — the row currently in "Download" state
@@ -46,7 +65,7 @@ const state = {
 // encrypt side and decrypt side could end up with different values (stale
 // state, autofill on an old field, back/forward navigation, etc.).
 function currentTempKey() {
-  return (getFragment() || '').trim();
+  return state.tempKey;
 }
 
 // Read+normalize a password field's value. Trim handles iOS keyboard
@@ -112,14 +131,35 @@ function decFlow() {
 // ---------------------------------------------------------------- bootstrap / room creation
 async function boot() {
   const q = getQueryParams();
-  const tempKey = currentTempKey();
-  if (!q.tunnelid || !tempKey) {
-    await createRoom();
+  const rawCode = getFragment();
+  if (!q.tunnelid || !rawCode) {
+    showRoomEntry();
     return;
   }
-  state.tunnelId = q.tunnelid;
+
+  try {
+    state.roomCode = await validateRoomCode(rawCode);
+    state.tempKey = await roomTempKey(state.roomCode);
+    state.capability = await deriveCapability(state.tempKey, 'room');
+  } catch (err) {
+    disableTunnelActions();
+    showRoomEntry();
+    setStatus($('roomEntryStatus'), err.message || 'The room link is invalid.', 'err');
+    return;
+  }
+
+  const expectedId = await capabilityId(state.capability);
+  if (q.tunnelid !== expectedId) {
+    disableTunnelActions();
+    showRoomEntry();
+    setStatus($('roomEntryStatus'), 'The room link is invalid or incomplete.', 'err');
+    return;
+  }
+
+  state.tunnelId = expectedId;
   state.ready = true;
-  $('tunnelInfo').textContent = 'Tunnel id: ' + state.tunnelId + ' · region ' + REGION.toUpperCase();
+  showRoomWorkspace();
+  $('tunnelInfo').textContent = 'Encrypted room · expires in 1 day · region ' + REGION.toUpperCase();
   await refreshList();
 }
 
@@ -129,25 +169,74 @@ function disableTunnelActions() {
   $('btnRefresh').disabled = true;
 }
 
-async function createRoom() {
-  const raw = window.prompt('Enter tunnel name (min 8 characters)');
-  if (raw === null) {
-    disableTunnelActions();
-    setStatus($('tunnelInfo'), 'No tunnel selected. Switch to Send or Clipboard, or reload to try again.', 'err');
-    return;
-  }
-  const name = raw.trim();
-  if (name.length < 8) {
-    disableTunnelActions();
-    setStatus($('tunnelInfo'), 'Tunnel name must be at least 8 characters. Reload to try again.', 'err');
-    return;
-  }
-  const tempKey = await sha256Hex(name);
-  const idFull  = await sha256Hex(tempKey);
-  const tunnel  = idFull.slice(0, 16);
-  // Reload with the derived id + fragment. The room name never leaves the browser.
-  window.location.href = window.location.pathname + '?tunnelid=' + tunnel + '#' + tempKey;
+function showRoomEntry() {
+  $('roomEntry').classList.remove('hidden');
+  for (const card of document.querySelectorAll('.room-workspace')) card.classList.add('hidden');
+  $('decCard').classList.add('hidden');
 }
+
+function roomUrl(tunnel, code) {
+  return window.location.origin + window.location.pathname +
+    '?tunnelid=' + encodeURIComponent(tunnel) + '#' + code;
+}
+
+async function openRoom(codeInput) {
+  const code = await validateRoomCode(codeInput);
+  const tempKey = await roomTempKey(code);
+  const capability = await deriveCapability(tempKey, 'room');
+  const tunnel = await capabilityId(capability);
+  window.location.assign(roomUrl(tunnel, code));
+}
+
+function showRoomWorkspace() {
+  $('roomEntry').classList.add('hidden');
+  for (const card of document.querySelectorAll('.room-workspace')) card.classList.remove('hidden');
+
+  const url = roomUrl(state.tunnelId, state.roomCode);
+  $('roomCodeDisplay').textContent = state.roomCode.replaceAll('.', ' ');
+  $('roomUrlDisplay').textContent = url;
+  renderQrCode($('roomQr'), url);
+}
+
+$('btnCreateRoom').onclick = async () => {
+  const button = $('btnCreateRoom');
+  try {
+    button.disabled = true;
+    setStatus($('roomEntryStatus'), 'Generating a secure room code…');
+    await openRoom(await generateRoomCode());
+  } catch (err) {
+    button.disabled = false;
+    setStatus($('roomEntryStatus'), err.message || 'Could not create the room.', 'err');
+  }
+};
+
+$('btnJoinRoom').onclick = async () => {
+  try {
+    $('btnJoinRoom').disabled = true;
+    setStatus($('roomEntryStatus'), 'Opening room…');
+    await openRoom($('roomCodeInput').value);
+  } catch (err) {
+    $('btnJoinRoom').disabled = false;
+    setStatus($('roomEntryStatus'), err.message || 'Could not open the room.', 'err');
+  }
+};
+
+$('roomCodeInput').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    $('btnJoinRoom').click();
+  }
+});
+
+$('btnCopyRoomCode').onclick = async () => {
+  const ok = await copyToClipboard(state.roomCode.replaceAll('.', ' '));
+  setStatus($('roomShareStatus'), ok ? 'Room code copied.' : 'Copy failed — select it manually.', ok ? 'ok' : 'warn');
+};
+
+$('btnCopyRoomUrl').onclick = async () => {
+  const ok = await copyToClipboard(roomUrl(state.tunnelId, state.roomCode));
+  setStatus($('roomShareStatus'), ok ? 'Room URL copied.' : 'Copy failed — select it manually.', ok ? 'ok' : 'warn');
+};
 
 // ---------------------------------------------------------------- list
 async function refreshList() {
@@ -155,7 +244,11 @@ async function refreshList() {
   $('decCard').classList.add('hidden');
   setStatus($('listStatus'), 'Loading files…');
   try {
-    const resp = await listTunnel({ region: REGION, tunnel: state.tunnelId });
+    const resp = await listTunnel({
+      region: REGION,
+      tunnel: state.tunnelId,
+      capability: state.capability,
+    });
 
     // Ensure we have a valid array - handle cases where objects might be a non-array value
     let files = [];
@@ -271,23 +364,31 @@ $('btnUpload').onclick = async () => {
     const pass = readPass('encPassInput');
 
     if (isChunked) {
-      // ---- RSv2 chunked multipart path ----
+      // ---- RSv2 authenticated chunked multipart path ----
       // Steps: 0=Request URLs, 1=Derive key, 2=Encrypt chunks, 3=Upload
       const file = state.file;
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const totalChunks = multipartChunkCount(file.size, CHUNK_SIZE);
 
       currentStep = 0;
       flow.start(0);
       setStatus($('uploadStatus'), 'Initiating multipart upload…');
       const mp = await getMultipartPresign({
         region: REGION, filename, chunks: totalChunks,
-        deleteOnDownload: $('dodInput').checked, tunnel: state.tunnelId,
+        deleteOnDownload: $('dodInput').checked,
+        tunnel: state.tunnelId,
+        capability: state.capability,
       });
       flow.done(0);
 
       currentStep = 1;
       flow.start(1);
-      const ctx = await createChunkedEncryptContext(pass, tempKey, CHUNK_SIZE, file.size);
+      const ctx = await createChunkedEncryptContext(
+        pass,
+        tempKey,
+        CHUNK_SIZE,
+        file.size,
+        totalChunks,
+      );
       flow.done(1);
 
       currentStep = 2;
@@ -313,6 +414,7 @@ $('btnUpload').onclick = async () => {
         bodies.push({ index: i, partNumber: mp.partUrls[i].partNumber, url: mp.partUrls[i].url, body, plainSize: plainChunk.length });
         chunkOffset = end;
       }
+      if (chunkOffset !== file.size) throw new Error('Multipart plan did not cover the complete file.');
       flow.done(2);
 
       currentStep = 3;
@@ -384,6 +486,7 @@ $('btnUpload').onclick = async () => {
       const p = await getTunnelUploadPresign({
         region: REGION, tunnel: state.tunnelId, filename,
         deleteOnDownload: $('dodInput').checked,
+        capability: state.capability,
       });
       flow.done(3);
 
@@ -452,9 +555,9 @@ async function decryptOne(f, tr, btn) {
     const tempKey = currentTempKey();
     const pass = readPass('decPassInput');
 
-    // Detect format via first 48 bytes.
+    // Detect format via the largest supported chunked header.
     setStatus(status, 'Detecting format…');
-    const headRes = await fetch(meta.url, { headers: { Range: 'bytes=0-47' } });
+    const headRes = await fetch(meta.url, { headers: { Range: 'bytes=0-51' } });
     if (!headRes.ok) throw new Error('Header fetch failed: HTTP ' + headRes.status);
     const headerBytes = new Uint8Array(await headRes.arrayBuffer());
     const format = detectFormat(headerBytes);
@@ -463,13 +566,10 @@ async function decryptOne(f, tr, btn) {
     let plain = null;
 
     if (format === 'v2') {
-      // ---- RSv2 chunked decrypt — stream directly to disk ----
+      // ---- Chunked decrypt — RSv2 authenticates the complete structure. ----
       setStatus(status, 'Downloading & decrypting…');
 
-      const dv = new DataView(headerBytes.buffer);
-      const chunkSize = dv.getUint32(8, true);
-      const totalSize = dv.getUint32(16, true) * 0x100000000 + dv.getUint32(12, true);
-      const totalChunks = chunkSize > 0 ? Math.ceil(totalSize / chunkSize) : 1;
+      const { totalSize, totalChunks } = chunkedMetadata(headerBytes);
 
       downloadBar = createUploadProgressBar($('downloadBar'), totalSize, { partLabel: 'Chunk' });
       downloadBar.show();
@@ -484,7 +584,14 @@ async function decryptOne(f, tr, btn) {
 
       let totalDecrypted = 0;
       let chunksDone = 0;
-      const chunkGen = decryptChunked(headerBytes, pass, tempKey, fetchRange);
+      const chunkGen = decryptChunked(
+        headerBytes,
+        pass,
+        tempKey,
+        fetchRange,
+        undefined,
+        meta.objsize,
+      );
       const { blobUrl, usedPicker } = await streamDecryptedDownload(
         name,
         chunkGen,
@@ -560,7 +667,7 @@ async function decryptOne(f, tr, btn) {
 
     // Transition this row's button to the "Download" / success state.
     // Guard against the row having been detached by a concurrent refreshList
-    // (e.g. delete-on-download fires refreshList before we reach here).
+    // (e.g. best-effort post-decrypt deletion refreshes the list first).
     if (tr.isConnected) {
       tr.dataset.state = 'ready';
       btn.textContent = 'Download';
@@ -569,7 +676,12 @@ async function decryptOne(f, tr, btn) {
     }
 
     if (meta.deleteondownload) {
-      deleteObject({ region: REGION, key: f.key }).then(refreshList).catch(() => {});
+      deleteObject({
+        region: REGION,
+        key: f.key,
+        room: state.tunnelId,
+        capability: state.capability,
+      }).then(refreshList).catch(() => {});
     }
   } catch (err) {
     console.error(err);
@@ -597,7 +709,12 @@ async function deleteOne(f) {
   resetCurrentDecrypt();
   $('decCard').classList.add('hidden');
   try {
-    await deleteObject({ region: REGION, key: f.key });
+    await deleteObject({
+      region: REGION,
+      key: f.key,
+      room: state.tunnelId,
+      capability: state.capability,
+    });
     setStatus($('listStatus'), 'Deleted.', 'ok');
     await refreshList();
   } catch (err) {

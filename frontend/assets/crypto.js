@@ -91,6 +91,21 @@ export async function sha256Hex(str) {
   return buf2hex(await crypto.subtle.digest('SHA-256', enc.encode(str)));
 }
 
+// Derive purpose-specific bearer capabilities without exposing the encryption
+// key to the Worker. A capability can authorize room/KV/delete operations, but
+// cannot be used to derive tempKey or decrypt content.
+export async function deriveCapability(tempKey, purpose) {
+  return sha256Hex(`RelaySecret capability v1\0${purpose}\0${tempKey}`);
+}
+
+export async function capabilityId(capability) {
+  return (await sha256Hex(capability)).slice(0, 16);
+}
+
+export async function capabilityDigest(capability) {
+  return sha256Hex(capability);
+}
+
 // 32 hex chars = 128 bits of entropy. Used as the URL-fragment temp key.
 export function randomTempKey() {
   const b = crypto.getRandomValues(new Uint8Array(16));
@@ -98,217 +113,243 @@ export function randomTempKey() {
 }
 
 // ---------------------------------------------------------------------------
-// RSv2 — chunked encryption for large files (>500 MB).
+// Chunked formats.
 //
-// RSv2 blob layout:
+// RSv2 declares the chunk count and authenticates the complete header plus
+// chunk index as AES-GCM associated data. This makes size/header edits,
+// reordering, missing chunks, and appended records detectable.
 //
-//   offset  size   field
-//   ------  -----  -------------------------------------------------------
-//   0       8      magic     = "RSv2" + 4x NUL
-//   8       4      chunkSize (uint32 LE, plaintext bytes per chunk)
-//   12      8      totalSize (uint64 LE, total plaintext bytes)
-//   20      16     salt      = PBKDF2 salt
-//   36      12     baseIV    = AES-GCM base nonce (random)
-//   48      ...    chunk records (repeated):
-//     +0    4      ctLen     (uint32 LE, = plaintextLen + 16 GCM tag)
-//     +4    N      ciphertext + 16-byte auth tag
-//
-// IV derivation per chunk:
-//   chunkIV(i) = baseIV XOR (0^8 || uint32_le(i))
-//
-// Each chunk is independently AES-GCM encrypted/decrypted.
+// RSv2 header:
+//   0..7    "RSv2" + 4 NUL
+//   8..11   nominal chunk size (uint32 LE)
+//   12..19  total plaintext size (uint64 LE)
+//   20..23  total chunk count (uint32 LE)
+//   24..39  PBKDF2 salt
+//   40..51  base AES-GCM IV
 // ---------------------------------------------------------------------------
 
-const MAGIC_V2 = new Uint8Array([0x52, 0x53, 0x76, 0x32, 0, 0, 0, 0]); // "RSv2\0\0\0\0"
-export const RSv2_HEADER_LEN = 48; // 8 + 4 + 8 + 16 + 12
+const MAGIC_V2 = new Uint8Array([0x52, 0x53, 0x76, 0x32, 0, 0, 0, 0]);
+export const RSv2_HEADER_LEN = 52;
 
-const CHUNK_LEN_PREFIX = 4; // uint32 LE before each chunk ciphertext
+const CHUNK_LEN_PREFIX = 4;
+const MAX_CHUNK_SIZE = 512 * 1024 * 1024;
+const MAX_CHUNKS = 10_000;
 
-// Read a uint32 LE from a byte array at offset.
 function readUint32LE(buf, offset) {
-  return buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24);
+  return (
+    buf[offset] |
+    (buf[offset + 1] << 8) |
+    (buf[offset + 2] << 16) |
+    (buf[offset + 3] << 24)
+  ) >>> 0;
 }
 
-// Write a uint32 LE into a byte array at offset.
 function writeUint32LE(buf, offset, val) {
-  buf[offset]     = val & 0xff;
+  buf[offset] = val & 0xff;
   buf[offset + 1] = (val >>> 8) & 0xff;
   buf[offset + 2] = (val >>> 16) & 0xff;
   buf[offset + 3] = (val >>> 24) & 0xff;
 }
 
-// Read a uint64 LE from a byte array at offset (returned as Number — fine for ≤2^53).
 function readUint64LE(buf, offset) {
   const lo = readUint32LE(buf, offset);
   const hi = readUint32LE(buf, offset + 4);
   return hi * 0x100000000 + lo;
 }
 
-// Write a uint64 LE into a byte array at offset.
 function writeUint64LE(buf, offset, val) {
-  const lo = val >>> 0;
-  const hi = Math.floor(val / 0x100000000);
-  writeUint32LE(buf, offset, lo);
-  writeUint32LE(buf, offset + 4, hi);
+  writeUint32LE(buf, offset, val >>> 0);
+  writeUint32LE(buf, offset + 4, Math.floor(val / 0x100000000));
 }
 
-// Derive a unique IV for each chunk by XORing the chunk index into the
-// last 4 bytes of the base IV. This guarantees nonce uniqueness as long as
-// the base IV is random (birthday bound negligible for 96-bit nonces).
 function deriveChunkIV(baseIV, chunkIndex) {
-  const iv = new Uint8Array(baseIV); // copy
-  // XOR the little-endian chunk index into the last 4 bytes.
-  iv[8]  ^= (chunkIndex & 0xff);
-  iv[9]  ^= ((chunkIndex >>> 8) & 0xff);
-  iv[10] ^= ((chunkIndex >>> 16) & 0xff);
-  iv[11] ^= ((chunkIndex >>> 24) & 0xff);
+  const iv = new Uint8Array(baseIV);
+  iv[8] ^= chunkIndex & 0xff;
+  iv[9] ^= (chunkIndex >>> 8) & 0xff;
+  iv[10] ^= (chunkIndex >>> 16) & 0xff;
+  iv[11] ^= (chunkIndex >>> 24) & 0xff;
   return iv;
 }
 
-/**
- * encryptChunked — encrypt a file in chunks via an async iterator.
- *
- * @param {AsyncIterable<Uint8Array>} chunkIterator  yields plaintext chunks
- * @param {string}  userPassword   optional password (combined with tempKey)
- * @param {string}  tempKey        URL-fragment key material
- * @param {number}  chunkSize      plaintext bytes per chunk (e.g. 128 MB)
- * @param {number}  totalSize      total plaintext file size
- * @param {function} onProgress    (encryptedBytes, totalBytes) => void
- * @returns {AsyncGenerator<Uint8Array>} yields RSv2 header then encrypted chunk records
- */
-export async function* encryptChunked(chunkIterator, userPassword, tempKey, chunkSize, totalSize, onProgress) {
-  const salt  = crypto.getRandomValues(new Uint8Array(SALT_LEN));
-  const baseIV = crypto.getRandomValues(new Uint8Array(IV_LEN));
-  const key   = await deriveKey(userPassword, tempKey, salt, 'encrypt');
+function chunkAad(header, chunkIndex) {
+  const aad = new Uint8Array(header.length + 4);
+  aad.set(header);
+  writeUint32LE(aad, header.length, chunkIndex);
+  return aad;
+}
 
-  // Yield the RSv2 header first.
+function validateHeaderNumbers(chunkSize, totalSize, totalChunks) {
+  if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK_SIZE) {
+    throw new Error('Invalid chunk size');
+  }
+  if (!Number.isSafeInteger(totalSize) || totalSize < 1) {
+    throw new Error('Invalid total size');
+  }
+  if (!Number.isSafeInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_CHUNKS) {
+    throw new Error('Invalid chunk count');
+  }
+}
+
+export function multipartChunkCount(totalSize, chunkSize) {
+  if (!Number.isSafeInteger(totalSize) || totalSize < 1 || chunkSize <= RSv2_HEADER_LEN) {
+    throw new Error('Invalid multipart dimensions');
+  }
+  return Math.ceil((totalSize + RSv2_HEADER_LEN) / chunkSize);
+}
+
+export async function createChunkedEncryptContext(
+  userPassword,
+  tempKey,
+  chunkSize,
+  totalSize,
+  totalChunks,
+) {
+  validateHeaderNumbers(chunkSize, totalSize, totalChunks);
+
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const baseIV = crypto.getRandomValues(new Uint8Array(IV_LEN));
+  const key = await deriveKey(userPassword, tempKey, salt, 'encrypt');
+
   const header = new Uint8Array(RSv2_HEADER_LEN);
   header.set(MAGIC_V2, 0);
   writeUint32LE(header, 8, chunkSize);
   writeUint64LE(header, 12, totalSize);
-  header.set(salt, 20);
-  header.set(baseIV, 36);
-  yield header;
+  writeUint32LE(header, 20, totalChunks);
+  header.set(salt, 24);
+  header.set(baseIV, 40);
 
-  let chunkIndex = 0;
-  let encrypted = 0;
-
-  for await (const plainChunk of chunkIterator) {
+  async function encryptChunk(plainChunk, chunkIndex) {
+    if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+      throw new Error('Chunk index outside declared structure');
+    }
     const iv = deriveChunkIV(baseIV, chunkIndex);
-    const ct = new Uint8Array(
-      await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainChunk)
-    );
-
-    // Chunk record: [4-byte length prefix][ciphertext + tag]
+    const ct = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: chunkAad(header, chunkIndex) },
+      key,
+      plainChunk,
+    ));
     const record = new Uint8Array(CHUNK_LEN_PREFIX + ct.length);
     writeUint32LE(record, 0, ct.length);
     record.set(ct, CHUNK_LEN_PREFIX);
-    yield record;
+    return record;
+  }
 
+  return { header, encryptChunk };
+}
+
+export async function* encryptChunked(
+  chunkIterator,
+  userPassword,
+  tempKey,
+  chunkSize,
+  totalSize,
+  onProgress,
+) {
+  const totalChunks = Math.ceil(totalSize / chunkSize);
+  const ctx = await createChunkedEncryptContext(
+    userPassword,
+    tempKey,
+    chunkSize,
+    totalSize,
+    totalChunks,
+  );
+  yield ctx.header;
+
+  let encrypted = 0;
+  let chunkIndex = 0;
+  for await (const plainChunk of chunkIterator) {
+    if (chunkIndex >= totalChunks) throw new Error('Too many plaintext chunks');
+    yield await ctx.encryptChunk(plainChunk, chunkIndex);
     encrypted += plainChunk.length;
     chunkIndex++;
     if (onProgress) onProgress(encrypted, totalSize);
   }
+  if (chunkIndex !== totalChunks || encrypted !== totalSize) {
+    throw new Error('Plaintext chunk structure does not match declared size');
+  }
 }
 
-/**
- * decryptChunked — decrypt an RSv2 blob by fetching byte ranges.
- *
- * @param {Uint8Array} headerBytes   first RSv2_HEADER_LEN bytes of the object
- * @param {string}     userPassword  optional password
- * @param {string}     tempKey       URL-fragment key material
- * @param {function}   fetchRange    async (start, end) => Uint8Array
- * @param {function}   onProgress    (decryptedBytes, totalBytes) => void
- * @returns {AsyncGenerator<Uint8Array>} yields decrypted plaintext chunks
- */
-export async function* decryptChunked(headerBytes, userPassword, tempKey, fetchRange, onProgress) {
-  // Validate magic.
-  for (let i = 0; i < MAGIC_LEN; i++) {
-    if (headerBytes[i] !== MAGIC_V2[i]) {
-      throw new Error('Unknown blob format (expected RSv2)');
-    }
+export async function* decryptChunked(
+  headerBytes,
+  userPassword,
+  tempKey,
+  fetchRange,
+  onProgress,
+  objectSize,
+) {
+  const format = detectFormat(headerBytes);
+  if (format !== 'v2') {
+    throw new Error('Expected a chunked RelaySecret payload');
   }
 
-  const chunkSize = readUint32LE(headerBytes, 8);
-  const totalSize = readUint64LE(headerBytes, 12);
-  const salt      = headerBytes.slice(20, 36);
-  const baseIV    = headerBytes.slice(36, 48);
+  const headerLen = RSv2_HEADER_LEN;
+  if (headerBytes.length < headerLen) throw new Error('Truncated chunked header');
+  const header = headerBytes.slice(0, headerLen);
 
+  const { chunkSize, totalSize, totalChunks } = chunkedMetadata(header);
+
+  const salt = header.slice(24, 40);
+  const baseIV = header.slice(40, 52);
   const key = await deriveKey(userPassword, tempKey, salt, 'decrypt');
 
-  let pos = RSv2_HEADER_LEN;
-  let chunkIndex = 0;
+  let pos = headerLen;
   let decrypted = 0;
-
-  while (decrypted < totalSize) {
-    // Read the 4-byte length prefix. If we're past the end, we get 0 bytes.
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const lenBuf = await fetchRange(pos, pos + CHUNK_LEN_PREFIX);
-    if (lenBuf.length === 0) break;
+    if (lenBuf.length !== CHUNK_LEN_PREFIX) throw new Error('Missing chunk length');
     const ctLen = readUint32LE(lenBuf, 0);
+    if (ctLen < 16 || ctLen > chunkSize + 16) throw new Error('Invalid ciphertext chunk length');
 
-    // Fetch the ciphertext (ctLen includes the 16-byte GCM tag).
-    const ctBuf = await fetchRange(pos + CHUNK_LEN_PREFIX, pos + CHUNK_LEN_PREFIX + ctLen);
+    const ctBuf = await fetchRange(
+      pos + CHUNK_LEN_PREFIX,
+      pos + CHUNK_LEN_PREFIX + ctLen,
+    );
+    if (ctBuf.length !== ctLen) throw new Error('Truncated ciphertext chunk');
 
-    const iv = deriveChunkIV(baseIV, chunkIndex);
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ctBuf);
-    const ptArr = new Uint8Array(pt);
+    const algorithm = {
+      name: 'AES-GCM',
+      iv: deriveChunkIV(baseIV, chunkIndex),
+      additionalData: chunkAad(header, chunkIndex),
+    };
+    const pt = new Uint8Array(await crypto.subtle.decrypt(algorithm, key, ctBuf));
+    decrypted += pt.length;
+    if (decrypted > totalSize) throw new Error('Decrypted data exceeds declared size');
+    yield pt;
 
-    yield ptArr;
-
-    decrypted += ptArr.length;
-    chunkIndex++;
     pos += CHUNK_LEN_PREFIX + ctLen;
     if (onProgress) onProgress(decrypted, totalSize);
   }
+
+  if (decrypted !== totalSize) throw new Error('Decrypted size does not match authenticated header');
+  if (Number.isSafeInteger(objectSize) && pos !== objectSize) {
+    throw new Error('Ciphertext object contains missing or appended data');
+  }
 }
 
-/**
- * detectFormat — peek at the first 8 bytes to determine RSv1 vs RSv2.
- * Returns 'v1', 'v2', or throws.
- */
 export function detectFormat(header) {
   if (header.length < MAGIC_LEN) throw new Error('Header too small');
-  let isV1 = true, isV2 = true;
-  for (let i = 0; i < MAGIC_LEN; i++) {
-    if (header[i] !== MAGIC[i])  isV1 = false;
-    if (header[i] !== MAGIC_V2[i]) isV2 = false;
+  const candidates = [
+    ['v1', MAGIC],
+    ['v2', MAGIC_V2],
+  ];
+  for (const [name, magic] of candidates) {
+    let match = true;
+    for (let i = 0; i < MAGIC_LEN; i++) {
+      if (header[i] !== magic[i]) match = false;
+    }
+    if (match) return name;
   }
-  if (isV1) return 'v1';
-  if (isV2) return 'v2';
   throw new Error('Unknown blob format');
 }
 
-/**
- * createChunkedEncryptContext — set up key, header, and per-chunk encrypt
- * for multipart upload. The caller keeps this object alive across chunks.
- *
- * Returns { header, encryptChunk(plainChunk, chunkIndex) => Uint8Array }
- *   header:       48-byte RSv2 header (upload once, before any chunks)
- *   encryptChunk: encrypt one plaintext chunk, returning [4-byte len][ct||tag]
- */
-export async function createChunkedEncryptContext(userPassword, tempKey, chunkSize, totalSize) {
-  const salt   = crypto.getRandomValues(new Uint8Array(SALT_LEN));
-  const baseIV = crypto.getRandomValues(new Uint8Array(IV_LEN));
-  const key    = await deriveKey(userPassword, tempKey, salt, 'encrypt');
-
-  // Build the RSv2 header.
-  const header = new Uint8Array(RSv2_HEADER_LEN);
-  header.set(MAGIC_V2, 0);
-  writeUint32LE(header, 8, chunkSize);
-  writeUint64LE(header, 12, totalSize);
-  header.set(salt, 20);
-  header.set(baseIV, 36);
-
-  function encryptChunk(plainChunk, chunkIndex) {
-    const iv = deriveChunkIV(baseIV, chunkIndex);
-    return crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainChunk).then(ct => {
-      ct = new Uint8Array(ct);
-      const record = new Uint8Array(CHUNK_LEN_PREFIX + ct.length);
-      writeUint32LE(record, 0, ct.length);
-      record.set(ct, CHUNK_LEN_PREFIX);
-      return record;
-    });
-  }
-
-  return { header, encryptChunk };
+export function chunkedMetadata(header) {
+  const format = detectFormat(header);
+  if (format !== 'v2') throw new Error('Not a chunked payload');
+  const headerLen = RSv2_HEADER_LEN;
+  if (header.length < headerLen) throw new Error('Truncated chunked header');
+  const chunkSize = readUint32LE(header, 8);
+  const totalSize = readUint64LE(header, 12);
+  const totalChunks = readUint32LE(header, 20);
+  validateHeaderNumbers(chunkSize, totalSize, totalChunks);
+  return { format, headerLen, chunkSize, totalSize, totalChunks };
 }

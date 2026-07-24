@@ -4,8 +4,9 @@
 //   * CORS is pinned to env.FRONTEND_ORIGIN via the shared helper.
 
 import { jsonResponse, errorResponse } from '../util/json.js';
+import { readCapability, verifyScopedCapability } from '../util/capability.js';
 
-const ID_REGEX = /^[a-f0-9]{8,64}$/;
+const ID_REGEX = /^[a-f0-9]{16}$/;
 
 export async function clipboardGet(id, request, env) {
   if (!ID_REGEX.test(id)) {
@@ -13,6 +14,9 @@ export async function clipboardGet(id, request, env) {
   }
   if (!env.CLIPBOARD_KV) {
     return errorResponse('kv unavailable', 'NO_KV', 500, env, request);
+  }
+  if (!await verifyScopedCapability(id, readCapability(request))) {
+    return errorResponse('clipboard authorization failed', 'FORBIDDEN', 403, env, request);
   }
   const data = await env.CLIPBOARD_KV.get(id);
   if (!data) return errorResponse('not found', 'NOT_FOUND', 404, env, request);
@@ -25,6 +29,9 @@ export async function clipboardPost(id, request, env) {
   }
   if (!env.CLIPBOARD_KV) {
     return errorResponse('kv unavailable', 'NO_KV', 500, env, request);
+  }
+  if (!await verifyScopedCapability(id, readCapability(request))) {
+    return errorResponse('clipboard authorization failed', 'FORBIDDEN', 403, env, request);
   }
 
   let body;

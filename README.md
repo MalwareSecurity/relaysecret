@@ -20,7 +20,7 @@ Visit [https://www.relaysecret.com/](https://www.relaysecret.com/) to try it out
 
 The architecture is Cloudflare Workers + R2 + Pages. Three regional R2 buckets (US, EU, APAC) store ciphertext. The Worker has two jobs:
 
-1. **Mint short-lived SigV4 presigned URLs** so the browser can PUT/GET/delete ciphertext directly against R2. The Worker never proxies bytes.
+1. **Mint short-lived SigV4 presigned URLs** so the browser can PUT/GET ciphertext directly against R2, and authorize deletion through the R2 binding. The Worker never proxies bytes.
 2. **Proxy VirusTotal SHA-1 lookups** so the API key stays server-side.
 
 A KV namespace stores encrypted clipboard blobs.
@@ -42,16 +42,23 @@ A KV namespace stores encrypted clipboard blobs.
 ### Delete / Expire
 
 - Object keys follow the format `{expiry-days}/{hex-id}`. R2 lifecycle rules auto-expire objects by prefix (1-day, 2-day, ..., 10-day).
-- Objects tagged with `deleteOnDownload` are deleted automatically after the first download.
-- Users can always delete files manually.
+- Objects tagged with `deleteOnDownload` are deleted by the official client after successful authenticated decryption. This is best-effort: a recipient can retain ciphertext or suppress deletion.
+- Manual deletion requires a purpose-specific capability derived from the URL-fragment key. Knowing only an object key is not enough.
 
 ### Room mode
 
 Visit [https://www.relaysecret.com/tunnel](https://www.relaysecret.com/tunnel).
 
-Create a "room" by entering a room name (min 8 characters). Others who enter the same room name see the same file list and can share/decrypt files. All files in a room expire after 1 day.
+Create a room and RelaySecret generates eight random words from EFF's
+7,776-word long list—about 103 bits of entropy. Others can join with those
+eight words, the complete URL, or its QR code. All files in a room expire after
+1 day.
 
-The room name is hashed with SHA-256 to derive the key material. The room name itself is never sent to the server — only the first 16 hex chars of its hash are used as the tunnel ID. Users can add an optional password for extra protection.
+The normalized room code is hashed with SHA-256 to derive key material. A
+separate, purpose-specific bearer capability authorizes room operations, so the
+Worker can authorize list/upload/delete requests without learning the room code
+or encryption key. The code stays in the URL fragment and is never sent to the
+server. Users can add an optional password for another layer of protection.
 
 ## Large file support
 
@@ -59,8 +66,9 @@ Files under 500 MB use the **RSv1** format: the entire file is encrypted in one 
 
 Files over 500 MB use the **RSv2** chunked format:
 - The file is split into 128 MB chunks. Each chunk is independently AES-GCM encrypted with a unique IV (derived by XOR-ing the chunk index into a random base nonce).
+- The authenticated data binds every chunk to the complete header, chunk index, total size, and chunk count. Missing, reordered, truncated, or appended data is rejected.
 - Chunks are uploaded via S3 multipart presigned URLs directly to R2 — still no bytes through the Worker.
-- On download, the browser detects the format from the first 48 bytes and decrypts each chunk using HTTP Range requests.
+- On download, the browser detects the format from the first 52 bytes and decrypts each chunk using HTTP Range requests.
 - Peak browser memory is ~260 MB regardless of total file size (128 MB plaintext + 128 MB ciphertext + overhead).
 
 ## Cryptography
@@ -69,12 +77,26 @@ All cryptography uses the **Web Crypto API**. No external libraries.
 
 | Primitive | Usage |
 |-----------|-------|
-| **AES-GCM-256** | File/message encryption. Per-chunk auth tags in RSv2. |
+| **AES-GCM-256** | File/message encryption. Per-chunk tags and authenticated structure in RSv2. |
 | **PBKDF2-HMAC-SHA256** | Key derivation from password + temp key. 600,000 iterations, 16-byte random salt. |
-| **HMAC-SHA256** | AWS SigV4 presigning, optional upload gate. |
-| **SHA-256** | Object key generation, room name derivation, VirusTotal lookups. |
+| **HMAC-SHA256** | AWS SigV4 presigning. |
+| **SHA-256** | Object key generation, room-code derivation, VirusTotal lookups. |
 
-The encryption key is derived as: `PBKDF2-HMAC-SHA256(password + tempKey, salt, 600000) -> 256 bits`. The temp key (128-bit random for single-recipient, SHA-256 of room name for tunnels) is the primary entropy source; the optional password is layered on top.
+The encryption key is derived as: `PBKDF2-HMAC-SHA256(password + tempKey, salt, 600000) -> 256 bits`. The temp key (128-bit random for single-recipient, SHA-256 of the generated room code for tunnels) is the primary entropy source; the optional password is layered on top.
+
+Anonymous API operations are protected by Worker rate-limit bindings. Deployments
+can additionally enable Cloudflare Turnstile; tokens are short-lived, single-use,
+and validated by the Worker before upload or clipboard-write URLs are issued.
+
+### Upgrade note
+
+Deploying this version invalidates existing room and clipboard links because
+their public identifiers now derive from scoped capabilities. Those items
+expire after one day. Existing single-transfer links remain downloadable, but
+legacy objects without deletion-capability metadata cannot be deleted through
+the API and instead remain until their configured lifecycle expiry. The
+authenticated chunked layout uses the RSv2 marker directly and replaces the
+earlier pre-release schema.
 
 ### Post-quantum note
 
