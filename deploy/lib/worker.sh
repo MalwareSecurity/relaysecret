@@ -71,10 +71,10 @@ worker_delete_secret() {
   local dir="$1"
   local name="$2"
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
-    echo "[dry-run] (cd ${dir} && wrangler secret delete ${name} --force)"
+    echo "[dry-run] printf 'y' | (cd ${dir} && wrangler secret delete ${name})"
     return 0
   fi
-  (cd "$dir" && wrangler_cli secret delete "$name" --force) || true
+  (cd "$dir" && printf 'y\n' | wrangler_cli secret delete "$name") || true
 }
 
 # worker_bind_domain API_HOST WORKER_NAME ZONE_ID
