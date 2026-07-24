@@ -99,21 +99,41 @@ const state = {
 };
 
 // ---------------------------------------------------------------- tabs
-function showTab(which) {
+const tabItems = [
+  { mode: 'message', tab: $('tabMsg'), pane: $('paneMsg') },
+  { mode: 'file', tab: $('tabFile'), pane: $('paneFile') },
+  { mode: 'decrypt', tab: $('tabDec'), pane: $('paneDec') },
+];
+
+function showTab(which, { focus = false } = {}) {
   state.mode = which;
-  $('tabMsg').classList.toggle('active', which === 'message');
-  $('tabFile').classList.toggle('active', which === 'file');
-  $('tabDec').classList.toggle('active', which === 'decrypt');
-  $('paneMsg').classList.toggle('hidden',    which !== 'message');
-  $('paneFile').classList.toggle('hidden',   which !== 'file');
-  $('paneDec').classList.toggle('hidden',    which !== 'decrypt');
+  for (const item of tabItems) {
+    const selected = item.mode === which;
+    item.tab.classList.toggle('active', selected);
+    item.tab.setAttribute('aria-selected', String(selected));
+    item.tab.tabIndex = selected ? 0 : -1;
+    item.pane.classList.toggle('hidden', !selected);
+  }
   $('encOptions').classList.toggle('hidden', which === 'decrypt');
   $('paneResult').classList.add('hidden');
+  if (focus) tabItems.find((item) => item.mode === which)?.tab.focus();
   updateEncryptButton();
 }
 $('tabMsg').onclick  = () => showTab('message');
 $('tabFile').onclick = () => showTab('file');
 $('tabDec').onclick  = () => showTab('decrypt');
+for (const [index, item] of tabItems.entries()) {
+  item.tab.addEventListener('keydown', (event) => {
+    let next = null;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabItems.length;
+    if (event.key === 'ArrowLeft') next = (index - 1 + tabItems.length) % tabItems.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = tabItems.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    showTab(tabItems[next].mode, { focus: true });
+  });
+}
 
 // ---------------------------------------------------------------- enc button enable logic
 function updateEncryptButton() {
@@ -130,7 +150,11 @@ $('msgInput').addEventListener('input', updateEncryptButton);
 
 // ---------------------------------------------------------------- dropzone
 const dz = $('dropzone');
-$('dzPick').onclick = (e) => { e.preventDefault(); $('fileInput').click(); };
+dz.addEventListener('click', () => {
+  if (!dz.classList.contains('locked') && !dz.classList.contains('done')) {
+    $('fileInput').click();
+  }
+});
 $('fileInput').onchange = (e) => { if (e.target.files[0]) setFile(e.target.files[0]); };
 dz.addEventListener('dragover', (e) => {
   if (dz.classList.contains('locked') || dz.classList.contains('done')) return;

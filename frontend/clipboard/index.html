@@ -12,8 +12,6 @@
   <!-- TURNSTILE_SCRIPT_PLACEHOLDER -->
 </head>
 <body>
-  <span id="forkongithub"><a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">Fork me on GitHub</a></span>
-
   <header class="site-header">
     <p class="wordmark"><a href="/">Relay Secret</a></p>
     <nav aria-label="Main navigation">
@@ -21,34 +19,71 @@
       <a href="/tunnel/">Tunnel</a>
       <a href="/clipboard/" class="active" aria-current="page">Clipboard</a>
     </nav>
-    <p class="tagline">Sync your clipboard between devices — encrypted end-to-end, stored for 1 day.</p>
   </header>
 
   <main class="page">
-    <div class="card stack">
+    <header class="page-intro">
+      <h1>Share a clipboard</h1>
+      <p>Move encrypted text between devices with a private link that expires after one day.</p>
+    </header>
+
+    <div class="card stack" id="clipboardEntry">
+      <h2>Open a shared clipboard</h2>
+      <p class="muted">Create a high-entropy private link, or reopen a clipboard using a shared name.</p>
+
+      <button id="btnCreateClipboard" class="primary" type="button">Create a secure clipboard</button>
+
+      <div class="field">
+        <label for="clipboardNameInput">Join with a shared name</label>
+        <input id="clipboardNameInput" type="text" minlength="8" autocomplete="off" autocapitalize="none"
+               spellcheck="false" placeholder="Enter at least 8 characters">
+        <p class="field-hint">Anyone who knows this name can derive the same clipboard link. Use a long, unique phrase.</p>
+      </div>
+      <button id="btnJoinClipboard" type="button">Join shared clipboard</button>
+      <p id="clipboardEntryStatus" class="muted" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="card stack hidden" id="clipboardWorkspace">
       <h2>Shared clipboard</h2>
       <p class="muted" id="clipInfo">Loading…</p>
 
       <div class="callout">
-        Copy on machine A, click <strong>Update clipboard</strong>. On machine B, visit this same URL and click <strong>Get clipboard</strong>. Your browser must grant clipboard permission.
+        <strong>Share this private link</strong>
+        <div class="code-block" id="clipboardUrlDisplay" aria-label="Shared clipboard URL"></div>
+        <button id="btnCopyClipboardUrl" type="button">Copy clipboard link</button>
+      </div>
+
+      <div class="field">
+        <label for="clipText">Shared text</label>
+        <textarea id="clipText" maxlength="200000" autocomplete="off" spellcheck="false"
+                  placeholder="Type or paste text here"></textarea>
+        <p class="field-hint">Text stays editable here, so the feature still works if browser clipboard permission is unavailable.</p>
+      </div>
+      <div class="clipboard-actions">
+        <button id="btnPaste" type="button">Paste from this device</button>
+        <button id="btnCopy" type="button">Copy to this device</button>
       </div>
 
       <div class="field">
         <label for="passInput">Password <span class="subtle">(optional)</span></label>
-        <input id="passInput" type="password" autocomplete="off" placeholder="Leave blank for no password">
+        <input id="passInput" type="password" autocomplete="new-password" placeholder="Use the same password on each device">
       </div>
       <div class="turnstile-shell" data-configured="<TURNSTILE_ENABLED_PLACEHOLDER>">
         <div class="cf-turnstile" data-sitekey="<TURNSTILE_SITE_KEY_PLACEHOLDER>" data-action="turnstile-spin-v2"></div>
       </div>
 
       <div class="row">
-        <button id="btnGet" class="primary" type="button">Get clipboard</button>
-        <button id="btnUpdate" type="button">Update clipboard</button>
+        <button id="btnUpdate" class="primary" type="button">Send this text</button>
+        <button id="btnGet" type="button">Load shared text</button>
       </div>
 
       <p id="status" class="muted" role="status" aria-live="polite"></p>
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>End-to-end encrypted in your browser. <a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">View source on GitHub</a>.</p>
+  </footer>
 
   <script type="module" src="/assets/clipboard.js"></script>
 </body>

@@ -13,8 +13,6 @@
   <script src="/assets/qrcode.js"></script>
 </head>
 <body>
-  <span id="forkongithub"><a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">Fork me on GitHub</a></span>
-
   <header class="site-header">
     <p class="wordmark"><a href="/">Relay Secret</a></p>
     <nav aria-label="Main navigation">
@@ -22,14 +20,17 @@
       <a href="/tunnel/" class="active" aria-current="page">Tunnel</a>
       <a href="/clipboard/">Clipboard</a>
     </nav>
-    <p class="tagline">Shared rooms for ad-hoc file exchange. Everyone with the link sees the same file list. Expires after 1 day.</p>
   </header>
 
   <main class="page">
+    <header class="page-intro">
+      <h1>Create or join a secure room</h1>
+      <p>Exchange encrypted files with anyone who has the room link or its eight-word code.</p>
+    </header>
 
     <!-- ── Create / join ───────────────────────────────────── -->
     <div class="card stack" id="roomEntry">
-      <h2>Create or join an encrypted room</h2>
+      <h2>Open a room</h2>
       <p class="muted">RelaySecret generates eight random words for each room. Share all eight words, the URL, or the QR code with the people you trust.</p>
 
       <button id="btnCreateRoom" class="primary" type="button">Create a secure room</button>
@@ -44,29 +45,31 @@
     </div>
 
     <!-- ── Room sharing ────────────────────────────────────── -->
-    <div class="card stack url-result room-workspace hidden" id="roomShare">
-      <h2>Share this room</h2>
-      <p class="muted">Anyone with either the complete code or URL can access this room. Send it through a trusted channel.</p>
+    <details class="card url-result room-workspace share-details hidden" id="roomShare">
+      <summary>Share this room</summary>
+      <div class="stack">
+        <p class="muted">Anyone with either the complete code or URL can access this room. Send it through a trusted channel.</p>
 
-      <div class="callout">
-        <strong>Eight-word room code</strong>
-        <p id="roomCodeDisplay" class="room-code" aria-label="Eight-word room code"></p>
-        <button id="btnCopyRoomCode" type="button">Copy code</button>
+        <div class="callout">
+          <strong>Eight-word room code</strong>
+          <p id="roomCodeDisplay" class="room-code" aria-label="Eight-word room code"></p>
+          <button id="btnCopyRoomCode" type="button">Copy code</button>
+        </div>
+
+        <div class="code-block" id="roomUrlDisplay" aria-label="Room URL"></div>
+        <button id="btnCopyRoomUrl" type="button">Copy room URL</button>
+
+        <div class="qr-wrap">
+          <div id="roomQr" class="qr-code" role="img" aria-label="QR code for the room URL"></div>
+          <p class="qr-hint muted">Scan with a phone camera to join this room.</p>
+        </div>
+        <p id="roomShareStatus" class="muted" role="status" aria-live="polite"></p>
       </div>
-
-      <div class="code-block" id="roomUrlDisplay" aria-label="Room URL"></div>
-      <button id="btnCopyRoomUrl" type="button">Copy room URL</button>
-
-      <div class="qr-wrap">
-        <div id="roomQr" class="qr-code" role="img" aria-label="QR code for the room URL"></div>
-        <p class="qr-hint muted">Scan with a phone camera to join this room.</p>
-      </div>
-      <p id="roomShareStatus" class="muted" role="status" aria-live="polite"></p>
-    </div>
+    </details>
 
     <!-- ── File list ──────────────────────────────────────── -->
     <div class="card stack room-workspace hidden">
-      <h2>Files in this tunnel</h2>
+      <h2>Files in this room</h2>
       <p class="muted" id="tunnelInfo">Loading…</p>
 
       <div class="field">
@@ -74,7 +77,7 @@
         <input id="decPassInput" type="password" autocomplete="new-password" placeholder="Leave blank if no password was set">
       </div>
 
-      <table class="filelist" aria-label="Files in this tunnel">
+      <table class="filelist" aria-label="Files in this room">
         <thead>
           <tr>
             <th scope="col">Filename</th>
@@ -83,7 +86,7 @@
           </tr>
         </thead>
         <tbody id="fileListBody">
-          <tr><td colspan="3" class="muted" style="text-align:center; padding: var(--sp-6) var(--sp-3);">No files yet.</td></tr>
+          <tr><td colspan="3" class="muted empty-state">No files yet.</td></tr>
         </tbody>
       </table>
 
@@ -106,13 +109,13 @@
 
     <!-- ── Upload ─────────────────────────────────────────── -->
     <div class="card stack room-workspace hidden">
-      <h2>Upload to this tunnel</h2>
-      <p class="muted">Files are encrypted in your browser with the tunnel key before upload. Large files are streamed in encrypted chunks — no fixed size limit.</p>
+      <h2>Upload to this room</h2>
+      <p class="muted">Files are encrypted in your browser with the room key before upload. Large files are streamed in encrypted chunks — no fixed size limit.</p>
 
-      <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Drop zone — drag a file here or click to select">
-        <p>Drag &amp; drop a file, or <a href="#" id="dzPick"><strong>click to browse</strong></a>.</p>
-        <p class="file-info" id="dzFileInfo"></p>
-      </div>
+      <button class="dropzone" id="dropzone" type="button" aria-label="Choose a file or drop one here">
+        <span class="dropzone-copy">Drag &amp; drop a file here, or <strong>choose a file</strong>.</span>
+        <span class="file-info" id="dzFileInfo"></span>
+      </button>
       <input type="file" id="fileInput" class="hidden" autocomplete="off">
 
       <div class="field">
@@ -120,8 +123,8 @@
         <input id="filenameInput" type="text" autocomplete="off" placeholder="Auto-filled from the selected file">
       </div>
       <div class="field">
-        <label for="encPassInput">Password <span class="subtle">(optional — extra layer on top of the tunnel key)</span></label>
-        <input id="encPassInput" type="password" autocomplete="new-password" placeholder="Leave blank to rely on the tunnel key alone">
+        <label for="encPassInput">Password <span class="subtle">(optional — extra layer on top of the room key)</span></label>
+        <input id="encPassInput" type="password" autocomplete="new-password" placeholder="Leave blank to rely on the room key alone">
       </div>
 
       <div class="checkbox-row">
@@ -141,6 +144,10 @@
     </div>
 
   </main>
+
+  <footer class="site-footer">
+    <p>End-to-end encrypted in your browser. <a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">View source on GitHub</a>.</p>
+  </footer>
 
   <script type="module" src="/assets/tunnel.js"></script>
 </body>

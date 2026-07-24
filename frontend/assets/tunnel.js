@@ -180,11 +180,16 @@ function roomUrl(tunnel, code) {
     '?tunnelid=' + encodeURIComponent(tunnel) + '#' + code;
 }
 
-async function openRoom(codeInput) {
+async function openRoom(codeInput, { revealShare = false } = {}) {
   const code = await validateRoomCode(codeInput);
   const tempKey = await roomTempKey(code);
   const capability = await deriveCapability(tempKey, 'room');
   const tunnel = await capabilityId(capability);
+  if (revealShare) {
+    try {
+      sessionStorage.setItem('relaysecret:reveal-room-share', tunnel);
+    } catch (_) { /* The room still works when session storage is unavailable. */ }
+  }
   window.location.assign(roomUrl(tunnel, code));
 }
 
@@ -196,6 +201,11 @@ function showRoomWorkspace() {
   $('roomCodeDisplay').textContent = state.roomCode.replaceAll('.', ' ');
   $('roomUrlDisplay').textContent = url;
   renderQrCode($('roomQr'), url);
+  try {
+    const revealShare = sessionStorage.getItem('relaysecret:reveal-room-share') === state.tunnelId;
+    $('roomShare').open = revealShare;
+    sessionStorage.removeItem('relaysecret:reveal-room-share');
+  } catch (_) { /* Leave sharing collapsed when session storage is unavailable. */ }
 }
 
 $('btnCreateRoom').onclick = async () => {
@@ -203,7 +213,7 @@ $('btnCreateRoom').onclick = async () => {
   try {
     button.disabled = true;
     setStatus($('roomEntryStatus'), 'Generating a secure room code…');
-    await openRoom(await generateRoomCode());
+    await openRoom(await generateRoomCode(), { revealShare: true });
   } catch (err) {
     button.disabled = false;
     setStatus($('roomEntryStatus'), err.message || 'Could not create the room.', 'err');
@@ -277,7 +287,7 @@ function renderList(files) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 3;
-    td.className = 'muted';
+    td.className = 'muted empty-state';
     td.textContent = 'No files yet.';
     tr.append(td);
     tbody.append(tr);
@@ -329,7 +339,7 @@ $('btnRefresh').onclick = refreshList;
 
 // ---------------------------------------------------------------- upload
 const dz = $('dropzone');
-$('dzPick').onclick = (e) => { e.preventDefault(); $('fileInput').click(); };
+dz.addEventListener('click', () => $('fileInput').click());
 $('fileInput').onchange = (e) => { if (e.target.files[0]) setFile(e.target.files[0]); };
 dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('over'));

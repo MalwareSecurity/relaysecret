@@ -7,13 +7,13 @@
   --color-surface: #FFFFFF;      /* cards, panels */
   --color-surface-alt: #FAF7F2;  /* inset / nested surfaces (progress bg, code areas) */
   --color-text-primary: #1A1A18; /* headings, body */
-  --color-text-muted: #6B6A66;   /* subtext, captions — lifted slightly for readability */
-  --color-text-subtle: #9A9894;  /* placeholders, disabled hints */
+  --color-text-muted: #65635F;   /* subtext, captions */
+  --color-text-subtle: #706E69;  /* placeholders, optional hints, table headings */
   --color-accent: #C0392B;       /* brand red — CTA, logo */
   --color-accent-hover: #A5321F;
   --color-accent-subtle: #FBF1EF; /* very light red tint for hover backgrounds */
   --color-border: #E4DDD3;       /* subtle warm-grey dividers */
-  --color-border-strong: #C8C0B6; /* stronger border for focused / filled states */
+  --color-border-strong: #8B8882; /* accessible control boundaries on white */
   --color-code-bg: #1E1E1C;      /* terminal dark bg */
   --color-code-syntax: #4A9CE8;  /* curl URL highlight */
   --color-code-frag: #E8843A;    /* fragment highlight */
@@ -22,13 +22,13 @@
   --color-success-hover: #235E42;  /* darker shade for button hover */
   --color-danger: #C0392B;
   --color-danger-subtle: #FBF1EF;
-  --color-warning: #C98A1A;
+  --color-warning: #8A5D0A;
   --color-warning-subtle: #FDF5E6;
 
   /* --- Typography --- */
   --font-display: Georgia, 'Times New Roman', serif;
-  --font-ui: 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* --- Type scale (modular, ~1.2 ratio) --- */
   --fs-xs:   0.75rem;    /* 12px — micro labels, table headers */
@@ -101,6 +101,12 @@ a {
   transition: color var(--t-fast);
 }
 a:hover { color: var(--color-accent-hover); text-decoration: underline; }
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
 code, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
 
 /* --- Layout --- */
@@ -130,9 +136,9 @@ button, .btn {
   font-weight: 500;
   letter-spacing: 0.01em;
   padding: var(--sp-2) var(--sp-5);
-  min-height: 38px;
+  min-height: 44px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   background: var(--color-surface);
   color: var(--color-text-primary);
   cursor: pointer;
@@ -141,7 +147,7 @@ button, .btn {
   white-space: nowrap;
 }
 button:hover, .btn:hover {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-text-muted);
   background: var(--color-surface-alt);
 }
 button:focus-visible, .btn:focus-visible {
@@ -186,8 +192,8 @@ textarea {
   font-family: var(--font-ui);
   font-size: var(--fs-base);
   padding: var(--sp-2) var(--sp-3);
-  min-height: 40px;
-  border: 1px solid var(--color-border);
+  min-height: 44px;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   color: var(--color-text-primary);
@@ -200,7 +206,7 @@ input::placeholder, textarea::placeholder {
 input:hover:not(:focus),
 select:hover:not(:focus),
 textarea:hover:not(:focus) {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-text-muted);
 }
 input:focus, select:focus, textarea:focus {
   outline: none;
@@ -218,7 +224,7 @@ label {
 
 /* --- Dropzone --- */
 .dropzone {
-  border: 2px dashed var(--color-border);
+  border: 2px dashed var(--color-border-strong);
   border-radius: var(--radius-lg);
   padding: var(--sp-8) var(--sp-6);
   text-align: center;
@@ -231,6 +237,11 @@ label {
   border-color: var(--color-accent);
   background: var(--color-accent-subtle);
   color: var(--color-text-primary);
+}
+.dropzone:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  border-color: var(--color-accent);
 }
 
 /* --- Code/URL display --- */
@@ -268,3 +279,14 @@ label {
 .hidden { display: none !important; }
 .row { display: flex; gap: var(--sp-3); flex-wrap: wrap; align-items: center; }
 .grow { flex: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

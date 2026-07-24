@@ -13,8 +13,6 @@
   <script src="/assets/qrcode.js"></script>
 </head>
 <body>
-  <span id="forkongithub"><a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">Fork me on GitHub</a></span>
-
   <header class="site-header">
     <p class="wordmark"><a href="/">Relay Secret</a></p>
     <nav aria-label="Main navigation">
@@ -22,17 +20,21 @@
       <a href="/tunnel/">Tunnel</a>
       <a href="/clipboard/">Clipboard</a>
     </nav>
-    <p class="tagline">Encrypt messages &amp; files in your browser. The server never sees plaintext.</p>
   </header>
 
   <main class="page">
+    <header class="page-intro">
+      <h1>Send a secret</h1>
+      <p>Encrypt a message or file in your browser and share a link only your recipient can open.</p>
+    </header>
+
     <div class="card" id="sendCard">
 
       <!-- Tab bar -->
       <div class="tabs" role="tablist" aria-label="Mode">
-        <button id="tabMsg"  role="tab" aria-selected="true"  aria-controls="paneMsg"  type="button">Encrypt message</button>
-        <button id="tabFile" role="tab" aria-selected="false" aria-controls="paneFile" type="button">Encrypt file</button>
-        <button id="tabDec"  role="tab" aria-selected="false" aria-controls="paneDec"  type="button">Decrypt</button>
+        <button id="tabMsg"  role="tab" aria-selected="true"  aria-controls="paneMsg"  tabindex="0"  type="button">Message</button>
+        <button id="tabFile" role="tab" aria-selected="false" aria-controls="paneFile" tabindex="-1" type="button">File</button>
+        <button id="tabDec"  role="tab" aria-selected="false" aria-controls="paneDec"  tabindex="-1" type="button">Decrypt</button>
       </div>
 
       <!-- ── Encrypt: message ──────────────────────────────── -->
@@ -48,16 +50,16 @@
       <section id="paneFile" role="tabpanel" aria-labelledby="tabFile" class="stack hidden">
         <h2>Encrypt a file</h2>
         <p class="muted">No fixed size limit — large files are streamed in encrypted chunks. The filename is stored unencrypted in metadata; rename before uploading if that matters.</p>
-        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Drop zone — drag a file here or click to select">
-          <div id="dzIdleContent">
-            <p>Drag &amp; drop a file here, or <a href="#" id="dzPick"><strong>click to browse</strong></a>.</p>
-            <p class="file-info" id="dzFileInfo"></p>
-          </div>
-          <div id="dzDoneContent" class="hidden">
-            <p class="dz-done-label">Uploaded successfully</p>
-            <p class="dz-done-name" id="dzDoneName"></p>
-          </div>
-        </div>
+        <button class="dropzone" id="dropzone" type="button" aria-label="Choose a file or drop one here">
+          <span id="dzIdleContent">
+            <span class="dropzone-copy">Drag &amp; drop a file here, or <strong>choose a file</strong>.</span>
+            <span class="file-info" id="dzFileInfo"></span>
+          </span>
+          <span id="dzDoneContent" class="hidden">
+            <span class="dz-done-label">Uploaded successfully</span>
+            <span class="dz-done-name" id="dzDoneName"></span>
+          </span>
+        </button>
         <button id="btnUploadAnother" type="button" class="hidden">Upload another file</button>
         <input type="file" id="fileInput" class="hidden" autocomplete="off">
         <input id="filenameInput" type="hidden" autocomplete="off">
@@ -167,6 +169,10 @@
       </details>
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>End-to-end encrypted in your browser. <a href="https://github.com/santrancisco/relaysecret" target="_blank" rel="noopener">View source on GitHub</a>.</p>
+  </footer>
 
   <script type="module" src="/assets/send.js"></script>
 </body>
