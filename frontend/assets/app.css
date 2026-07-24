@@ -335,9 +335,73 @@ table.filelist td.size {
 }
 
 @media (max-width: 640px) {
-  table.filelist th:nth-child(2),
-  table.filelist td:nth-child(2) { display: none; }
-  table.filelist td.actions button { margin-left: var(--sp-1); }
+  table.filelist {
+    display: block;
+    border-collapse: separate;
+  }
+  table.filelist thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  table.filelist tbody {
+    display: grid;
+    gap: var(--sp-3);
+  }
+  table.filelist tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--sp-2) var(--sp-3);
+    padding: var(--sp-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-alt);
+  }
+  table.filelist td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  table.filelist tbody tr:hover td {
+    background: transparent;
+  }
+  table.filelist td.name {
+    grid-column: 1 / -1;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  table.filelist td:nth-child(2) {
+    align-self: center;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  table.filelist td:nth-child(2)::before {
+    content: 'Size: ';
+    color: var(--color-text-subtle);
+    font-weight: 600;
+  }
+  table.filelist td.actions {
+    display: flex;
+    grid-column: 1 / -1;
+    gap: var(--sp-2);
+    padding-top: var(--sp-1);
+  }
+  table.filelist td.actions button {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+  }
+  table.filelist td.empty-state {
+    grid-column: 1 / -1;
+    padding: var(--sp-4) var(--sp-2);
+  }
 }
 
 /* ============================================================
@@ -669,6 +733,7 @@ body.busy button { pointer-events: none; opacity: 0.6; }
 /* Clickable affordance for preview images */
 img.preview { cursor: zoom-in; transition: transform var(--t-base), box-shadow var(--t-base); }
 img.preview:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+img.preview:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 
 /* ============================================================
    Section intro text (cards with descriptive lead paragraphs)

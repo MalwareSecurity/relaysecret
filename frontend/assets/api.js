@@ -20,6 +20,125 @@ function turnstileEnabled() {
   return !!key && key !== 'none' && !key.startsWith('<');
 }
 
+const TURNSTILE_EVENT = 'relaysecret:turnstile-state';
+
+function announceTurnstileState(state) {
+  document.dispatchEvent(new CustomEvent(TURNSTILE_EVENT, { detail: { state } }));
+}
+
+// These names are referenced by data-* callback attributes on each widget.
+// Keep the callbacks tiny: page-specific UI is managed by
+// createTurnstileController below.
+window.relaySecretTurnstileReady = () => announceTurnstileState('ready');
+window.relaySecretTurnstileError = () => announceTurnstileState('error');
+window.relaySecretTurnstileExpired = () => announceTurnstileState('expired');
+window.relaySecretTurnstileTimeout = () => announceTurnstileState('timeout');
+
+/**
+ * Keep a protected action's button and status text in sync with the implicit
+ * Turnstile widget. The backend remains the source of truth; this is only a
+ * clear, fail-closed frontend state.
+ */
+export function createTurnstileController({ button, status, canSubmit }) {
+  const configured = turnstileEnabled();
+  let ready = !configured;
+  let scriptLoaded = !configured;
+  let loadTimer = null;
+
+  function setVerificationStatus(message, kind = null) {
+    if (!status) return;
+    status.textContent = message;
+    status.classList.remove('status-ok', 'status-err', 'status-warn');
+    if (kind === 'ok') status.classList.add('status-ok');
+    if (kind === 'err') status.classList.add('status-err');
+    if (kind === 'warn') status.classList.add('status-warn');
+  }
+
+  function sync() {
+    if (!button) return;
+    const actionReady = typeof canSubmit === 'function' ? canSubmit() : true;
+    button.disabled = !actionReady || !ready;
+  }
+
+  function hasToken() {
+    const field = document.querySelector('[name="cf-turnstile-response"]');
+    return !!(field && field.value);
+  }
+
+  function markReady() {
+    ready = true;
+    if (loadTimer) clearTimeout(loadTimer);
+    setVerificationStatus('Human verification complete.', 'ok');
+    sync();
+  }
+
+  function markPending(message, kind = null) {
+    ready = false;
+    setVerificationStatus(message, kind);
+    sync();
+  }
+
+  function onState(event) {
+    switch (event.detail && event.detail.state) {
+      case 'ready':
+        markReady();
+        break;
+      case 'error':
+        markPending('Human verification is temporarily unavailable. It will retry automatically.', 'err');
+        break;
+      case 'expired':
+        markPending('Human verification expired. Complete it again to continue.', 'warn');
+        break;
+      case 'timeout':
+        markPending('Human verification timed out. Complete it again to continue.', 'warn');
+        break;
+      case 'reset':
+        markPending('Complete human verification again to continue.');
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!configured) {
+    setVerificationStatus('');
+    sync();
+    return { get ready() { return true; }, sync };
+  }
+
+  document.addEventListener(TURNSTILE_EVENT, onState);
+  markPending('Loading human verification…');
+
+  // A callback may have fired before this page module finished evaluating.
+  // Polling also catches browser extensions or privacy tools that suppress the
+  // normal callback while still allowing the response field to be populated.
+  const poll = window.setInterval(() => {
+    if (hasToken()) {
+      markReady();
+      return;
+    }
+    if (!scriptLoaded && window.turnstile) {
+      scriptLoaded = true;
+      setVerificationStatus('Complete human verification to continue.');
+    }
+  }, 250);
+
+  loadTimer = window.setTimeout(() => {
+    const widgetFrame = document.querySelector('.cf-turnstile iframe');
+    if ((!window.turnstile || !widgetFrame) && !hasToken()) {
+      markPending('Human verification could not load. Check your connection or content blocker, then reload.', 'err');
+    }
+  }, 12000);
+
+  window.addEventListener('pagehide', () => {
+    window.clearInterval(poll);
+    if (loadTimer) window.clearTimeout(loadTimer);
+    document.removeEventListener(TURNSTILE_EVENT, onState);
+  }, { once: true });
+
+  return { get ready() { return ready; }, sync };
+}
+
 function turnstileToken() {
   if (!turnstileEnabled()) return '';
   const field = document.querySelector('[name="cf-turnstile-response"]');
@@ -33,6 +152,7 @@ function turnstileToken() {
 function resetTurnstile() {
   if (turnstileEnabled() && window.turnstile && typeof window.turnstile.reset === 'function') {
     window.turnstile.reset();
+    announceTurnstileState('reset');
   }
 }
 

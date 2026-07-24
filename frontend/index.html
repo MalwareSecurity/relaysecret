@@ -10,7 +10,6 @@
   <link rel="stylesheet" href="/assets/app.css">
   <script src="/assets/config.js"></script>
   <!-- TURNSTILE_SCRIPT_PLACEHOLDER -->
-  <script src="/assets/qrcode.js"></script>
 </head>
 <body>
   <header class="site-header">
@@ -97,8 +96,11 @@
           <label for="dodInput">Delete after successful decryption (best effort)</label>
         </div>
         <div class="turnstile-shell" data-configured="<TURNSTILE_ENABLED_PLACEHOLDER>">
-          <div class="cf-turnstile" data-sitekey="<TURNSTILE_SITE_KEY_PLACEHOLDER>" data-action="turnstile-spin-v2"></div>
+          <div class="cf-turnstile" data-sitekey="<TURNSTILE_SITE_KEY_PLACEHOLDER>" data-action="turnstile-spin-v2"
+               data-callback="relaySecretTurnstileReady" data-error-callback="relaySecretTurnstileError"
+               data-expired-callback="relaySecretTurnstileExpired" data-timeout-callback="relaySecretTurnstileTimeout"></div>
         </div>
+        <p id="turnstileStatus" class="muted" role="status" aria-live="polite">Loading human verification…</p>
         <div class="row">
           <button id="btnEncrypt" class="primary" type="button" disabled>Encrypt &amp; Upload</button>
           <span id="encStatus" class="muted grow" role="status" aria-live="polite"></span>

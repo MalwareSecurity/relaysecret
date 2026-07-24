@@ -2295,3 +2295,8 @@ var qrcode = function() {
 }(function () {
     return qrcode;
 }));
+
+// RelaySecret loads this vendored library as an ES module only when a QR code
+// is actually requested. Keeping the export here avoids a render-blocking
+// script on every initial page load.
+export default qrcode;

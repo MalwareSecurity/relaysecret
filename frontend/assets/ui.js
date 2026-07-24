@@ -57,23 +57,45 @@ export async function copyToClipboard(text) {
   }
 }
 
-// Render a share URL as a QR code using the locally hosted qrcode.js library.
-export function renderQrCode(host, url) {
+let _qrFactoryPromise = null;
+function qrFactory() {
+  if (!_qrFactoryPromise) {
+    _qrFactoryPromise = import('./qrcode.js').then((module) => module.default);
+  }
+  return _qrFactoryPromise;
+}
+
+// Render a share URL as a QR code. The vendored generator is loaded from this
+// origin only when a result needs a QR code, keeping it off the initial path.
+export async function renderQrCode(host, url) {
   if (!host) return;
   host.textContent = '';
-  if (typeof window.qrcode !== 'function') return;
+  host.setAttribute('aria-busy', 'true');
+
+  let qrcode;
+  try {
+    qrcode = await qrFactory();
+  } catch (_) {
+    host.textContent = 'QR code unavailable.';
+    host.removeAttribute('aria-busy');
+    return;
+  }
 
   let qr = null;
   for (let type = 4; type <= 40; type++) {
     try {
-      const candidate = window.qrcode(type, 'L');
+      const candidate = qrcode(type, 'L');
       candidate.addData(url);
       candidate.make();
       qr = candidate;
       break;
     } catch (_) { /* Data did not fit; try the next QR version. */ }
   }
-  if (!qr) return;
+  if (!qr) {
+    host.textContent = 'QR code unavailable.';
+    host.removeAttribute('aria-busy');
+    return;
+  }
 
   const SVG = 'http://www.w3.org/2000/svg';
   const count = qr.getModuleCount();
@@ -106,6 +128,7 @@ export function renderQrCode(host, url) {
   path.setAttribute('fill', 'black');
   svg.append(path);
   host.append(svg);
+  host.removeAttribute('aria-busy');
 }
 
 // Convert a byte array to / from a hex string. Used for the clipboard
@@ -225,6 +248,7 @@ export function createProgressFlow(containerEl, steps) {
 // outside, the close button, or the Escape key.
 // ------------------------------------------------------------------
 let _modalEl = null;
+let _modalPreviousFocus = null;
 function ensureImageModal() {
   if (_modalEl) return _modalEl;
   const overlay = document.createElement('div');
@@ -249,14 +273,30 @@ function ensureImageModal() {
   overlay.append(content);
   document.body.append(overlay);
 
-  const hide = () => overlay.classList.add('hidden');
+  const hide = () => {
+    overlay.classList.add('hidden');
+    img.removeAttribute('src');
+    if (_modalPreviousFocus && _modalPreviousFocus.isConnected) {
+      _modalPreviousFocus.focus();
+    }
+    _modalPreviousFocus = null;
+  };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) hide(); });
   closeBtn.addEventListener('click', hide);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !overlay.classList.contains('hidden')) hide();
+    if (overlay.classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hide();
+    } else if (e.key === 'Tab') {
+      // The close button is the dialog's only control. Keep keyboard focus
+      // inside the modal until it is dismissed.
+      e.preventDefault();
+      closeBtn.focus();
+    }
   });
 
-  _modalEl = { overlay, img };
+  _modalEl = { overlay, img, closeBtn };
   return _modalEl;
 }
 
@@ -431,7 +471,24 @@ function formatTime(seconds) {
 }
 
 export function showImageModal(src) {
-  const { overlay, img } = ensureImageModal();
+  const { overlay, img, closeBtn } = ensureImageModal();
+  _modalPreviousFocus = document.activeElement;
   img.src = src;
   overlay.classList.remove('hidden');
+  closeBtn.focus();
+}
+
+export function enableImageModal(img, src) {
+  if (!img) return;
+  const open = () => showImageModal(src);
+  img.tabIndex = 0;
+  img.setAttribute('role', 'button');
+  img.setAttribute('aria-label', 'Open enlarged decrypted image');
+  img.onclick = open;
+  img.onkeydown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  };
 }

@@ -5,6 +5,8 @@ config.env
 *.zip
 tunnelworker
 node_modules
+playwright-report
+test-results
 dist
 wrangler.toml
 opencode.json

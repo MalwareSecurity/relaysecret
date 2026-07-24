@@ -13,11 +13,13 @@ import {
   deriveCapability,
   capabilityId,
 } from './crypto.js';
-import { clipboardGet, clipboardPut, ApiError } from './api.js';
+import {
+  clipboardGet, clipboardPut, ApiError, createTurnstileController,
+} from './api.js';
 import { generateRoomCode } from './room-code.js';
 import {
   $, setStatus, getQueryParams, getFragment, bytesToHex, hexToBytes,
-  copyToClipboard,
+  copyToClipboard, renderQrCode,
 } from './ui.js';
 
 const state = { clipId: '', tempKey: '', capability: '' };
@@ -37,7 +39,9 @@ function showWorkspace() {
   $('clipboardEntry').classList.add('hidden');
   $('clipboardWorkspace').classList.remove('hidden');
   $('clipInfo').textContent = 'Encrypted · expires after 1 day';
-  $('clipboardUrlDisplay').textContent = clipboardUrl(state.clipId, state.tempKey);
+  const url = clipboardUrl(state.clipId, state.tempKey);
+  $('clipboardUrlDisplay').textContent = url;
+  renderQrCode($('clipboardQr'), url);
 }
 
 async function openClipboard(nameInput) {
@@ -123,6 +127,11 @@ $('btnCopy').onclick = async () => {
   const ok = await copyToClipboard(text);
   setStatus($('status'), ok ? 'Copied to this device.' : 'Copy permission was unavailable. Select the text manually.', ok ? 'ok' : 'warn');
 };
+
+createTurnstileController({
+  button: $('btnUpdate'),
+  status: $('turnstileStatus'),
+});
 
 $('btnUpdate').onclick = async () => {
   try {

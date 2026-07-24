@@ -39,11 +39,12 @@ import {
 } from './room-code.js';
 import {
   getTunnelUploadPresign, getDownloadPresign, getMultipartPresign, listTunnel, deleteObject,
+  createTurnstileController,
 } from './api.js';
 import {
   $, formatBytes, setStatus, getQueryParams, getFragment,
   safeFilename, readFileBytes, createProgressFlow, createUploadProgressBar,
-  streamDecryptedDownload, showImageModal, copyToClipboard, renderQrCode,
+  streamDecryptedDownload, enableImageModal, copyToClipboard, renderQrCode,
 } from './ui.js';
 
 const REGION = 'us'; // Tunnels are pinned to us for now (matches backend default).
@@ -354,8 +355,14 @@ function setFile(f) {
   $('dzFileInfo').textContent = f.name + '  (' + formatBytes(f.size) + ')';
   $('filenameInput').value = f.name;
   dz.classList.add('filled');
-  $('btnUpload').disabled = !state.ready;
+  turnstileController.sync();
 }
+
+const turnstileController = createTurnstileController({
+  button: $('btnUpload'),
+  status: $('turnstileStatus'),
+  canSubmit: () => state.ready && state.file !== null,
+});
 
 $('btnUpload').onclick = async () => {
   if (!state.file) return;
@@ -666,7 +673,7 @@ async function decryptOne(f, tr, btn) {
       if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
         img.src = url;
         img.classList.remove('hidden');
-        img.onclick = () => showImageModal(url);
+        enableImageModal(img, url);
       } else if (name.endsWith('.txt') || ext === 'txt') {
         ta.value = new TextDecoder().decode(plain);
         ta.classList.remove('hidden');

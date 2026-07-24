@@ -20,11 +20,12 @@ import {
 } from './crypto.js';
 import {
   getUploadPresign, getDownloadPresign, getMultipartPresign, deleteObject, ApiError,
+  createTurnstileController,
 } from './api.js';
 import {
   $, formatBytes, setStatus, getQueryParams, getFragment,
   safeFilename, copyToClipboard, b64url, readFileBytes,
-  createProgressFlow, createUploadProgressBar, streamDecryptedDownload, showImageModal,
+  createProgressFlow, createUploadProgressBar, streamDecryptedDownload, enableImageModal,
   renderQrCode,
 } from './ui.js';
 
@@ -138,15 +139,24 @@ for (const [index, item] of tabItems.entries()) {
 // ---------------------------------------------------------------- enc button enable logic
 function updateEncryptButton() {
   const btn = $('btnEncrypt');
+  let inputReady = false;
   if (state.mode === 'message') {
-    btn.disabled = $('msgInput').value.trim().length === 0;
+    inputReady = $('msgInput').value.trim().length > 0;
   } else if (state.mode === 'file') {
-    btn.disabled = state.file === null;
-  } else {
-    btn.disabled = true;
+    inputReady = state.file !== null;
   }
+  btn.disabled = !inputReady || !turnstileController?.ready;
 }
 $('msgInput').addEventListener('input', updateEncryptButton);
+
+const turnstileController = createTurnstileController({
+  button: $('btnEncrypt'),
+  status: $('turnstileStatus'),
+  canSubmit: () => (
+    (state.mode === 'message' && $('msgInput').value.trim().length > 0) ||
+    (state.mode === 'file' && state.file !== null)
+  ),
+});
 
 // ---------------------------------------------------------------- dropzone
 const dz = $('dropzone');
@@ -640,7 +650,7 @@ async function showDecrypted() {
       const img = $('decImg');
       img.src = url;
       img.classList.remove('hidden');
-      img.onclick = () => showImageModal(url);
+      enableImageModal(img, url);
     }
   } else if (blobUrl) {
     // Chunked fallback path — blob URL from ReadableStream, no copy in JS memory.
